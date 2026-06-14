@@ -1,12 +1,7 @@
 import React from 'react'
+import { SHAPES } from '../lib/stickers.js'
 
 const BG_SWATCHES = ['#FFD700', '#FFFFFF', '#E11D48', '#FF9900', '#111111', '#22C55E']
-const SHAPES = [
-  { key: 'rounded_rect', label: 'Rounded' },
-  { key: 'circle', label: 'Circle' },
-  { key: 'tag', label: 'Tag' },
-  { key: 'text', label: 'Text only' },
-]
 
 export default function PropertiesPanel({ spec, api }) {
   if (!spec) {
@@ -30,6 +25,7 @@ export default function PropertiesPanel({ spec, api }) {
           onBlur={api.commit}
         />
       </label>
+      <button className="btn small" onClick={api.fitSticker}>⤢ Fit shape to text</button>
 
       <div className="field">
         <span>Shape</span>
@@ -89,6 +85,13 @@ export default function PropertiesPanel({ spec, api }) {
         <span>Rotation — {spec.rotation}°</span>
         <input type="range" min="-180" max="180" value={spec.rotation}
           onChange={(e) => setGeom({ rotation: +e.target.value })}
+          onMouseUp={api.commit} onTouchEnd={api.commit} />
+      </label>
+
+      <label className="field">
+        <span>Text rotation — {spec.textAngle || 0}°</span>
+        <input type="range" min="-180" max="180" value={spec.textAngle || 0}
+          onChange={(e) => set({ textAngle: +e.target.value })}
           onMouseUp={api.commit} onTouchEnd={api.commit} />
       </label>
 

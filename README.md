@@ -87,13 +87,19 @@ Each overlay is stored as:
   "textColor": "#000000",
   "bgColor": "#FFD700",
   "shape": "rounded_rect",
+  "textAngle": 0,
   "opacity": 1,
-  "shadow": null
+  "shadow": null,
+  "boxW": 180,
+  "boxH": 64
 }
 ```
 
-`shape` ∈ `text` · `rounded_rect` · `circle` · `tag`. A project stores the full
-array in `projects.sticker_json`, so any saved project reloads exactly.
+`shape` ∈ `text` · `rounded_rect` · `rect` · `pill` · `circle` · `tag` ·
+`diamond` · `banner` · `starburst`. `textAngle` rotates only the price text;
+`boxW`/`boxH` pin the shape size so editing the text doesn't resize it (use
+"Fit shape to text" to re-fit). A project stores the full array in
+`projects.sticker_json`.
 
 ## Deploy (GitHub Pages)
 

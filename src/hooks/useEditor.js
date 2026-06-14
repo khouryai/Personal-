@@ -5,6 +5,8 @@ import {
   rebuildStickerObject,
   serializeSticker,
   serializeAll,
+  setStickerText,
+  fitStickerToText,
 } from '../lib/stickers.js'
 import {
   createMarkupStart, updateMarkupDraw, isTooSmall, makeArrowGroup,
@@ -315,8 +317,28 @@ export function useEditor() {
     const c = canvasRef.current
     const o = c?.getActiveObject()
     if (!o || o.stickerType !== 'price_tag') return
+    const keys = Object.keys(patch)
+    // Editing only the price text updates it in place — shape size stays put.
+    if (keys.length === 1 && keys[0] === 'text') {
+      if (setStickerText(c, o, patch.text)) {
+        setActiveSpec(serializeSticker(o))
+        return
+      }
+      // Fallback (e.g. restored sticker): rebuild keeps the stored box size.
+      o.spec = { ...o.spec, text: patch.text }
+      setActiveSpec(serializeSticker(rebuildStickerObject(c, o)))
+      return
+    }
     o.spec = { ...o.spec, ...patch }
+    // Changing font size re-fits the shape; other style edits keep the box.
+    if ('fontSize' in patch) { o.spec.boxW = null; o.spec.boxH = null }
     setActiveSpec(serializeSticker(rebuildStickerObject(c, o)))
+  }, [])
+
+  const fitSticker = useCallback(() => {
+    const c = canvasRef.current
+    const o = c?.getActiveObject()
+    if (o?.stickerType === 'price_tag') setActiveSpec(serializeSticker(fitStickerToText(c, o)))
   }, [])
 
   const updateGeom = useCallback((patch) => {
@@ -505,15 +527,19 @@ export function useEditor() {
     if (!isSupabaseConfigured) { setStatus('Supabase not configured'); return }
     try {
       setStatus('Saving…')
+      // Save the marked-up render so the project reopens with edits, not the raw photo.
+      const dataUrl = renderDataUrl('png')
+      const finalUrl = dataUrl ? await uploadExport(await dataUrlToBlob(dataUrl), 'png') : null
       let originalUrl = null
       if (originalFileRef.current) originalUrl = await uploadOriginal(originalFileRef.current)
       const res = await saveProject({
-        id: projectId, originalImageUrl: originalUrl, stickerJson: serializeAll(c),
+        id: projectId, originalImageUrl: originalUrl,
+        finalImageUrl: finalUrl, stickerJson: serializeAll(c),
       })
       if (res.ok) { setProjectId(res.project.id); setStatus('Project saved ✓') }
       else setStatus(`Save failed: ${res.reason}`)
     } catch (err) { setStatus(`Save failed: ${err.message}`) }
-  }, [projectId])
+  }, [projectId, renderDataUrl])
 
   const fetchGallery = useCallback(() => listProjects(), [])
 
@@ -522,7 +548,7 @@ export function useEditor() {
     tool, setTool, markupColor, markupWidth, cropMode,
     api: {
       loadImageFromFile, openImageUrl, addSticker, applyTemplate,
-      updateStyle, updateGeom, updateMarkup, commit,
+      updateStyle, updateGeom, updateMarkup, fitSticker, commit,
       bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup,
       undo, zoomBy, resetZoom, exportImage, save, fetchGallery,
       startCrop, applyCrop, cancelCrop,

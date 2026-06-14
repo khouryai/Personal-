@@ -31,6 +31,7 @@ export default function Gallery({ api, onClose, onOpen }) {
 
         <div className="gallery-grid">
           {state.projects.map((p) => {
+            // Prefer the marked-up render so reopening shows the edited image.
             const img = p.final_image_url || p.original_image_url
             return (
               <div className="gallery-item" key={p.id}>
@@ -38,13 +39,13 @@ export default function Gallery({ api, onClose, onOpen }) {
                   ? <img src={img} alt="saved" loading="lazy" />
                   : <div className="gallery-noimg">no image</div>}
                 <div className="gallery-actions">
-                  {p.original_image_url && (
-                    <button className="btn" onClick={() => { onOpen(p.original_image_url); onClose() }}>
-                      Edit
+                  {img && (
+                    <button className="btn" onClick={() => { onOpen(img); onClose() }}>
+                      Open
                     </button>
                   )}
-                  {p.final_image_url && (
-                    <a className="btn" href={p.final_image_url} target="_blank" rel="noreferrer">View</a>
+                  {img && (
+                    <a className="btn" href={img} target="_blank" rel="noreferrer">View</a>
                   )}
                 </div>
               </div>

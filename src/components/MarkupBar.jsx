@@ -36,7 +36,16 @@ export default function MarkupBar({ tool, setTool, markupColor, markupWidth, api
             onChange={(e) => api.updateMarkup({ width: +e.target.value })} />
         </label>
       </div>
-      <button className="btn danger small" onClick={api.clearMarkup}>Clear all markup</button>
+      <button
+        className="btn danger small"
+        onClick={() => {
+          if (window.confirm('Clear all markup? You can still undo this afterwards.')) {
+            api.clearMarkup()
+          }
+        }}
+      >
+        Clear all markup
+      </button>
     </div>
   )
 }
