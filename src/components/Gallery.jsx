@@ -39,11 +39,9 @@ export default function Gallery({ api, onClose, onOpen }) {
                   ? <img src={img} alt="saved" loading="lazy" />
                   : <div className="gallery-noimg">no image</div>}
                 <div className="gallery-actions">
-                  {img && (
-                    <button className="btn" onClick={() => { onOpen(img); onClose() }}>
-                      Open
-                    </button>
-                  )}
+                  <button className="btn" onClick={() => { api.openProject(p.id); onClose() }}>
+                    Edit
+                  </button>
                   {img && (
                     <a className="btn" href={img} target="_blank" rel="noreferrer">View</a>
                   )}

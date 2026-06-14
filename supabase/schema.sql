@@ -12,6 +12,7 @@ create table if not exists public.projects (
   original_image_url text,
   final_image_url    text,
   sticker_json       jsonb not null default '[]'::jsonb,
+  scene_json         jsonb,                      -- full editable scene (stickers + markup) for reopening
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now()
 );

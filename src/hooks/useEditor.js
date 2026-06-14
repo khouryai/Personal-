@@ -14,7 +14,7 @@ import {
 } from '../lib/markup.js'
 import { TEMPLATES } from '../lib/templates.js'
 import { uploadOriginal, uploadExport } from '../lib/storage.js'
-import { saveProject, listProjects } from '../lib/projects.js'
+import { saveProject, listProjects, loadProject } from '../lib/projects.js'
 import { isSupabaseConfigured } from '../lib/supabase.js'
 
 const GRID = 20
@@ -25,6 +25,7 @@ export function useEditor() {
   const canvasRef = useRef(null)
   const imageScaleRef = useRef(1) // naturalWidth / canvasWidth -> export multiplier
   const originalFileRef = useRef(null)
+  const originalUrlRef = useRef(null) // uploaded original photo URL (reused across saves)
   const historyRef = useRef([])
   const drawingRef = useRef(null) // { obj, origin, tool } while drawing a markup
   const cropRectRef = useRef(null)
@@ -278,18 +279,50 @@ export function useEditor() {
 
   const loadImageFromFile = useCallback(async (file) => {
     originalFileRef.current = file
+    originalUrlRef.current = null
     setProjectId(null)
     await setBackground(URL.createObjectURL(file), { clear: true })
     setStatus('Image loaded')
   }, [setBackground])
 
-  // open a saved image (from the gallery) into a fresh canvas
+  // open a saved image (flattened) into a fresh canvas
   const openImageUrl = useCallback(async (url) => {
     originalFileRef.current = null
+    originalUrlRef.current = null
     setProjectId(null)
     await setBackground(url, { clear: true })
     setStatus('Opened saved image')
   }, [setBackground])
+
+  // Reopen a saved PROJECT with its stickers + markup as editable objects.
+  const openProject = useCallback(async (id) => {
+    setStatus('Opening project…')
+    const res = await loadProject(id)
+    if (!res.ok) { setStatus(`Open failed: ${res.reason}`); return }
+    const p = res.project
+    const scene = p.scene_json
+    const bg = scene?.bg || p.original_image_url
+    // Legacy / no editable scene -> fall back to opening the flattened image.
+    if (!scene?.objects || !bg) {
+      await openImageUrl(p.final_image_url || p.original_image_url)
+      setProjectId(p.id)
+      return
+    }
+    originalFileRef.current = null
+    originalUrlRef.current = p.original_image_url || null
+    await setBackground(bg, { clear: true })
+    const c = canvasRef.current
+    const ratio = c.getWidth() / (scene.w || c.getWidth())
+    const objs = await util.enlivenObjects(scene.objects)
+    objs.forEach((o) => {
+      o.set({ left: o.left * ratio, top: o.top * ratio, scaleX: o.scaleX * ratio, scaleY: o.scaleY * ratio })
+      o.setCoords(); c.add(o)
+    })
+    c.requestRenderAll()
+    historyRef.current = []; pushHistory()
+    setProjectId(p.id)
+    setStatus('Project reopened — fully editable')
+  }, [setBackground, openImageUrl, pushHistory])
 
   // ------------------------------------------------------------- stickers
   const centerPoint = () => {
@@ -496,7 +529,40 @@ export function useEditor() {
     return dataUrl
   }, [])
 
+  // Render the background ONLY (overlays hidden) — used to persist the exact
+  // editable backdrop, including any crops, for reopening a project.
+  const renderBackgroundDataUrl = useCallback(() => {
+    const c = canvasRef.current
+    if (!c || !c.backgroundImage) return null
+    const objs = c.getObjects()
+    const vis = objs.map((o) => o.visible)
+    objs.forEach((o) => o.set('visible', false))
+    const saved = c.viewportTransform.slice()
+    c.setViewportTransform([1, 0, 0, 1, 0, 0]); c.requestRenderAll()
+    const url = c.toDataURL({ format: 'png', multiplier: imageScaleRef.current })
+    c.setViewportTransform(saved)
+    objs.forEach((o, i) => o.set('visible', vis[i]))
+    c.requestRenderAll()
+    return url
+  }, [])
+
   const dataUrlToBlob = (d) => fetch(d).then((r) => r.blob())
+
+  // Upload the original photo once and reuse the URL across saves.
+  const ensureOriginalUrl = useCallback(async () => {
+    if (originalUrlRef.current) return originalUrlRef.current
+    if (originalFileRef.current) {
+      originalUrlRef.current = await uploadOriginal(originalFileRef.current)
+    }
+    return originalUrlRef.current
+  }, [])
+
+  // Serialize the full editable scene (stickers + markup) + canvas size.
+  const buildScene = useCallback(() => {
+    const c = canvasRef.current
+    if (!c) return null
+    return { v: 1, w: c.getWidth(), h: c.getHeight(), objects: c.getObjects().map((o) => o.toObject(PERSIST_PROPS)) }
+  }, [])
 
   const exportImage = useCallback(async (format = 'png') => {
     const dataUrl = renderDataUrl(format)
@@ -507,19 +573,21 @@ export function useEditor() {
     if (isSupabaseConfigured) {
       try {
         setStatus('Uploading export…')
-        const blob = await dataUrlToBlob(dataUrl)
-        const finalUrl = await uploadExport(blob, format)
-        let originalUrl = null
-        if (originalFileRef.current) originalUrl = await uploadOriginal(originalFileRef.current)
+        const finalUrl = await uploadExport(await dataUrlToBlob(dataUrl), format)
+        const bgData = renderBackgroundDataUrl()
+        const bgUrl = bgData ? await uploadExport(await dataUrlToBlob(bgData), 'png') : null
+        const originalUrl = await ensureOriginalUrl()
+        const scene = buildScene(); if (scene) scene.bg = bgUrl
         const res = await saveProject({
           id: projectId, originalImageUrl: originalUrl,
           finalImageUrl: finalUrl, stickerJson: serializeAll(canvasRef.current),
+          sceneJson: scene,
         })
         if (res.ok) { setProjectId(res.project.id); setStatus('Saved to Supabase ✓') }
         else setStatus(`Saved locally (Supabase: ${res.reason})`)
       } catch (err) { setStatus(`Export saved locally (upload failed: ${err.message})`) }
     }
-  }, [renderDataUrl, projectId])
+  }, [renderDataUrl, projectId, ensureOriginalUrl, buildScene, renderBackgroundDataUrl])
 
   const save = useCallback(async () => {
     const c = canvasRef.current
@@ -527,19 +595,22 @@ export function useEditor() {
     if (!isSupabaseConfigured) { setStatus('Supabase not configured'); return }
     try {
       setStatus('Saving…')
-      // Save the marked-up render so the project reopens with edits, not the raw photo.
+      // Save both the marked-up render and the editable scene so the project
+      // reopens with its stickers + markup fully editable.
       const dataUrl = renderDataUrl('png')
       const finalUrl = dataUrl ? await uploadExport(await dataUrlToBlob(dataUrl), 'png') : null
-      let originalUrl = null
-      if (originalFileRef.current) originalUrl = await uploadOriginal(originalFileRef.current)
+      const bgData = renderBackgroundDataUrl()
+      const bgUrl = bgData ? await uploadExport(await dataUrlToBlob(bgData), 'png') : null
+      const originalUrl = await ensureOriginalUrl()
+      const scene = buildScene(); if (scene) scene.bg = bgUrl
       const res = await saveProject({
         id: projectId, originalImageUrl: originalUrl,
-        finalImageUrl: finalUrl, stickerJson: serializeAll(c),
+        finalImageUrl: finalUrl, stickerJson: serializeAll(c), sceneJson: scene,
       })
       if (res.ok) { setProjectId(res.project.id); setStatus('Project saved ✓') }
       else setStatus(`Save failed: ${res.reason}`)
     } catch (err) { setStatus(`Save failed: ${err.message}`) }
-  }, [projectId, renderDataUrl])
+  }, [projectId, renderDataUrl, ensureOriginalUrl, buildScene, renderBackgroundDataUrl])
 
   const fetchGallery = useCallback(() => listProjects(), [])
 
@@ -547,7 +618,7 @@ export function useEditor() {
     attach, ready, hasImage, activeSpec, activeMarkup, snap, setSnap, status,
     tool, setTool, markupColor, markupWidth, cropMode,
     api: {
-      loadImageFromFile, openImageUrl, addSticker, applyTemplate,
+      loadImageFromFile, openImageUrl, openProject, addSticker, applyTemplate,
       updateStyle, updateGeom, updateMarkup, fitSticker, commit,
       bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup,
       undo, zoomBy, resetZoom, exportImage, save, fetchGallery,

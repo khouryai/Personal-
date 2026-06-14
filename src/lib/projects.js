@@ -1,15 +1,15 @@
 import { supabase, isSupabaseConfigured } from './supabase.js'
 
 // Persist a project row. `id` optional — when provided we update in place.
-export async function saveProject({ id, originalImageUrl, finalImageUrl, stickerJson }) {
+export async function saveProject({ id, originalImageUrl, finalImageUrl, stickerJson, sceneJson }) {
   if (!isSupabaseConfigured) {
     return { ok: false, reason: 'supabase-not-configured' }
   }
-  const row = {
-    original_image_url: originalImageUrl ?? null,
-    final_image_url: finalImageUrl ?? null,
-    sticker_json: stickerJson ?? [],
-  }
+  // Only include provided fields so updates don't clobber existing values with null.
+  const row = { sticker_json: stickerJson ?? [] }
+  if (originalImageUrl != null) row.original_image_url = originalImageUrl
+  if (finalImageUrl != null) row.final_image_url = finalImageUrl
+  if (sceneJson !== undefined) row.scene_json = sceneJson
   let query
   if (id) {
     query = supabase.from('projects').update(row).eq('id', id).select().single()
