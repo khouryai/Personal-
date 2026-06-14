@@ -49,24 +49,24 @@ The whole canvas is **deterministic from `sticker_json`** — see the contract b
 
 ```bash
 npm install
-cp .env.example .env      # then paste your Supabase anon key
-npm run dev               # http://localhost:5173
+npm run dev               # http://localhost:5173 — works immediately
 ```
 
-The app is fully usable **without** Supabase keys — upload, edit and export all
-work client-side. Persistence/upload activate once keys are present.
+A live Supabase backend is **already wired in** (dedicated project
+`pricetag-studio`, ref `uhyslmfvseliykfhhwyh`) via the committed public config
+in [`src/lib/supabaseConfig.js`](src/lib/supabaseConfig.js) — uploads, exports
+and project saves work out of the box, no `.env` needed.
 
-### Supabase
+### Pointing at your own Supabase project (optional)
 
-1. In the Supabase Dashboard → **SQL Editor**, run [`supabase/schema.sql`](supabase/schema.sql).
-   It creates the `projects` table, the `images` + `exports` storage buckets,
-   and public (anon) RLS policies (MVP has no auth).
-2. Project Settings → **API**: copy the project URL and the `anon` / publishable
-   key into `.env`:
+1. In the Dashboard → **SQL Editor**, run [`supabase/schema.sql`](supabase/schema.sql)
+   (creates the `projects` table, `images` + `exports` buckets, anon RLS policies).
+2. Copy `.env.example` → `.env` and set your project URL + anon/publishable key.
+   Env vars override the committed config:
 
    ```
-   VITE_SUPABASE_URL=https://tazqkbcgbomajbtbthde.supabase.co
-   VITE_SUPABASE_ANON_KEY=...
+   VITE_SUPABASE_URL=https://YOUR-REF.supabase.co
+   VITE_SUPABASE_ANON_KEY=sb_publishable_...
    ```
 
 ## sticker_json contract
@@ -97,12 +97,12 @@ array in `projects.sticker_json`, so any saved project reloads exactly.
 
 ## Deploy (GitHub Pages)
 
-1. Repo **Settings → Pages → Source: GitHub Actions**.
-2. Add repo secrets `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`
-   (Settings → Secrets and variables → Actions).
-3. Push to `main` (or this feature branch) — [`deploy.yml`](.github/workflows/deploy.yml)
+1. Repo **Settings → Pages → Source: GitHub Actions** (one-time, manual).
+2. Push to `main` (or this feature branch) — [`deploy.yml`](.github/workflows/deploy.yml)
    builds and publishes `dist/`. `base: './'` keeps asset paths correct on the
-   `/<repo>/` subpath.
+   `/<repo>/` subpath. The Supabase config is committed, so **no secrets are
+   required**; optionally set `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`
+   repo secrets to override it.
 
 > Prefer Vercel? Import the repo, set the two env vars, framework **Vite** —
 > the relative base path works there too.
