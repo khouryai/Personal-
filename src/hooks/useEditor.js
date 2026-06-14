@@ -1,39 +1,91 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Canvas, FabricImage, Point } from 'fabric'
+import { Canvas, FabricImage, Point, Rect, PencilBrush, util } from 'fabric'
 import {
   createStickerObject,
   rebuildStickerObject,
   serializeSticker,
   serializeAll,
 } from '../lib/stickers.js'
+import {
+  createMarkupStart, updateMarkupDraw, isTooSmall, makeArrowGroup,
+  applyMarkupStyle, PERSIST_PROPS,
+} from '../lib/markup.js'
 import { TEMPLATES } from '../lib/templates.js'
 import { uploadOriginal, uploadExport } from '../lib/storage.js'
-import { saveProject } from '../lib/projects.js'
+import { saveProject, listProjects } from '../lib/projects.js'
 import { isSupabaseConfigured } from '../lib/supabase.js'
 
-const MAX_DISPLAY = 1000 // px — longest canvas edge on screen
 const GRID = 20
 
 export function useEditor() {
   const elRef = useRef(null)
+  const stageRef = useRef(null)
   const canvasRef = useRef(null)
   const imageScaleRef = useRef(1) // naturalWidth / canvasWidth -> export multiplier
   const originalFileRef = useRef(null)
-  const historyRef = useRef([]) // snapshots of serialized sticker arrays
+  const historyRef = useRef([])
+  const drawingRef = useRef(null) // { obj, origin, tool } while drawing a markup
+  const cropRectRef = useRef(null)
 
   const [ready, setReady] = useState(false)
   const [hasImage, setHasImage] = useState(false)
   const [activeSpec, setActiveSpec] = useState(null)
+  const [activeMarkup, setActiveMarkup] = useState(null)
   const [snap, setSnap] = useState(false)
   const [status, setStatus] = useState('')
   const [projectId, setProjectId] = useState(null)
-  const snapRef = useRef(false)
-  snapRef.current = snap
+  const [tool, setTool] = useState(null) // null=select | line|arrow|box|circle|pen
+  const [markupColor, setMarkupColor] = useState('#ff3b30')
+  const [markupWidth, setMarkupWidth] = useState(4)
+  const [cropMode, setCropMode] = useState(false)
+
+  // refs mirroring state for use inside Fabric event closures
+  const snapRef = useRef(false); snapRef.current = snap
+  const toolRef = useRef(null); toolRef.current = tool
+  const colorRef = useRef(markupColor); colorRef.current = markupColor
+  const widthRef = useRef(markupWidth); widthRef.current = markupWidth
+  const cropRef = useRef(false); cropRef.current = cropMode
+  const pinchRef = useRef(false)
+
+  // ----------------------------------------------------------- fit to screen
+  // Size the canvas to fill the available stage area, rescaling overlays so
+  // the layout stays aligned. Called on load, crop, and container resize.
+  const fitToContainer = useCallback((refitObjects = true) => {
+    const c = canvasRef.current
+    const bg = c?.backgroundImage
+    const stage = stageRef.current
+    if (!c || !bg || !stage) return
+    const availW = Math.max(120, stage.clientWidth - 16)
+    const availH = Math.max(120, stage.clientHeight - 16)
+    const natW = bg.width
+    const natH = bg.height
+    const scale = Math.min(availW / natW, availH / natH) // fill, no upscale beyond fit
+    const cw = Math.round(natW * scale)
+    const ch = Math.round(natH * scale)
+    const oldW = c.getWidth() || cw
+    const ratio = cw / oldW
+
+    if (refitObjects && Math.abs(ratio - 1) > 0.001) {
+      c.getObjects().forEach((o) => {
+        o.set({
+          left: o.left * ratio, top: o.top * ratio,
+          scaleX: o.scaleX * ratio, scaleY: o.scaleY * ratio,
+        })
+        o.setCoords()
+      })
+    }
+    c.setDimensions({ width: cw, height: ch })
+    bg.set({ scaleX: cw / natW, scaleY: ch / natH })
+    imageScaleRef.current = natW / cw
+    c.setViewportTransform([1, 0, 0, 1, 0, 0])
+    c.requestRenderAll()
+  }, [])
 
   // -------------------------------------------------------------- init canvas
   const attach = useCallback((el) => {
     if (!el || canvasRef.current) return
     elRef.current = el
+    stageRef.current = el.closest('.stage')
     const canvas = new Canvas(el, {
       backgroundColor: '#1f2937',
       preserveObjectStacking: true,
@@ -43,113 +95,199 @@ export function useEditor() {
 
     const sync = () => {
       const o = canvas.getActiveObject()
-      setActiveSpec(o && o.stickerType === 'price_tag' ? serializeSticker(o) : null)
+      if (o && o.stickerType === 'price_tag') {
+        setActiveSpec(serializeSticker(o)); setActiveMarkup(null)
+      } else if (o && o.markup) {
+        setActiveMarkup({ color: o.markupColor || colorRef.current, width: o.markupWidth || widthRef.current })
+        setActiveSpec(null)
+      } else { setActiveSpec(null); setActiveMarkup(null) }
     }
     canvas.on('selection:created', sync)
     canvas.on('selection:updated', sync)
-    canvas.on('selection:cleared', () => setActiveSpec(null))
-    canvas.on('object:modified', () => {
-      sync()
-      pushHistory()
-    })
+    canvas.on('selection:cleared', () => { setActiveSpec(null); setActiveMarkup(null) })
+    canvas.on('object:modified', () => { sync(); pushHistory() })
     canvas.on('object:moving', (e) => {
       if (!snapRef.current) return
       const t = e.target
       t.set({ left: Math.round(t.left / GRID) * GRID, top: Math.round(t.top / GRID) * GRID })
     })
+    canvas.on('path:created', (e) => {
+      e.path.markup = true; e.path.markupTool = 'pen'
+      e.path.markupColor = colorRef.current; e.path.markupWidth = widthRef.current
+      pushHistory()
+    })
 
     // wheel zoom (desktop)
     canvas.on('mouse:wheel', (opt) => {
-      const delta = opt.e.deltaY
-      let zoom = canvas.getZoom() * 0.999 ** delta
-      zoom = Math.min(5, Math.max(0.2, zoom))
+      let zoom = canvas.getZoom() * 0.999 ** opt.e.deltaY
+      zoom = Math.min(6, Math.max(0.2, zoom))
       canvas.zoomToPoint(new Point(opt.e.offsetX, opt.e.offsetY), zoom)
-      opt.e.preventDefault()
-      opt.e.stopPropagation()
+      opt.e.preventDefault(); opt.e.stopPropagation()
     })
 
-    // alt-drag to pan
+    // drawing markups + alt-drag pan
+    const sp = (e) => (canvas.getScenePoint ? canvas.getScenePoint(e) : canvas.getPointer(e))
     let panning = false
     let last = null
     canvas.on('mouse:down', (opt) => {
+      if (pinchRef.current) return
       if (opt.e.altKey) {
-        panning = true
-        canvas.selection = false
-        last = { x: opt.e.clientX, y: opt.e.clientY }
+        panning = true; canvas.selection = false
+        last = { x: opt.e.clientX ?? opt.e.touches?.[0].clientX, y: opt.e.clientY ?? opt.e.touches?.[0].clientY }
+        return
+      }
+      const t = toolRef.current
+      if (t && t !== 'pen' && !cropRef.current) {
+        const p = sp(opt.e)
+        const obj = createMarkupStart(t, p, { color: colorRef.current, width: widthRef.current })
+        if (obj) { canvas.add(obj); drawingRef.current = { obj, origin: p, tool: t } }
       }
     })
     canvas.on('mouse:move', (opt) => {
-      if (!panning || !last) return
-      const vpt = canvas.viewportTransform
-      vpt[4] += opt.e.clientX - last.x
-      vpt[5] += opt.e.clientY - last.y
-      canvas.requestRenderAll()
-      last = { x: opt.e.clientX, y: opt.e.clientY }
+      if (panning && last) {
+        const cx = opt.e.clientX ?? opt.e.touches?.[0]?.clientX
+        const cy = opt.e.clientY ?? opt.e.touches?.[0]?.clientY
+        const vpt = canvas.viewportTransform
+        vpt[4] += cx - last.x; vpt[5] += cy - last.y
+        canvas.requestRenderAll(); last = { x: cx, y: cy }
+        return
+      }
+      if (drawingRef.current) {
+        const d = drawingRef.current
+        updateMarkupDraw(d.obj, d.tool, d.origin, sp(opt.e))
+        canvas.requestRenderAll()
+      }
     })
-    canvas.on('mouse:up', () => {
-      panning = false
-      canvas.selection = true
-      last = null
+    canvas.on('mouse:up', (opt) => {
+      panning = false; last = null
+      const d = drawingRef.current
+      if (d) {
+        drawingRef.current = null
+        const p = sp(opt.e)
+        if (isTooSmall(d.tool, d.origin, p)) {
+          canvas.remove(d.obj)
+        } else if (d.tool === 'arrow') {
+          canvas.remove(d.obj)
+          const g = makeArrowGroup(d.origin.x, d.origin.y, p.x, p.y, colorRef.current, widthRef.current)
+          canvas.add(g); canvas.setActiveObject(g); pushHistory()
+        } else {
+          d.obj.setCoords(); canvas.setActiveObject(d.obj); pushHistory()
+        }
+      }
+      if (!toolRef.current) canvas.selection = true
     })
+
+    // pinch-to-zoom (mobile, two-finger) + two-finger pan
+    const upper = canvas.upperCanvasEl
+    let pinchStart = null
+    const dist = (t) => Math.hypot(t[0].clientX - t[1].clientX, t[0].clientY - t[1].clientY)
+    const mid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 })
+    upper.addEventListener('touchstart', (e) => {
+      if (e.touches.length === 2) {
+        pinchRef.current = true
+        drawingRef.current && canvas.remove(drawingRef.current.obj)
+        drawingRef.current = null
+        pinchStart = { d: dist(e.touches), zoom: canvas.getZoom(), m: mid(e.touches) }
+        e.preventDefault()
+      }
+    }, { passive: false })
+    upper.addEventListener('touchmove', (e) => {
+      if (pinchRef.current && e.touches.length === 2 && pinchStart) {
+        const rect = upper.getBoundingClientRect()
+        const m = mid(e.touches)
+        let zoom = Math.min(6, Math.max(0.2, pinchStart.zoom * (dist(e.touches) / pinchStart.d)))
+        canvas.zoomToPoint(new Point(m.x - rect.left, m.y - rect.top), zoom)
+        const vpt = canvas.viewportTransform
+        vpt[4] += m.x - pinchStart.m.x; vpt[5] += m.y - pinchStart.m.y
+        pinchStart.m = m
+        canvas.requestRenderAll()
+        e.preventDefault()
+      }
+    }, { passive: false })
+    const endPinch = (e) => { if (e.touches.length < 2) { pinchRef.current = false; pinchStart = null } }
+    upper.addEventListener('touchend', endPinch)
+    upper.addEventListener('touchcancel', endPinch)
+
+    // refit on container resize / orientation change
+    const ro = new ResizeObserver(() => fitToContainer(true))
+    if (stageRef.current) ro.observe(stageRef.current)
+    canvas._ro = ro
 
     setReady(true)
+  }, [fitToContainer])
+
+  useEffect(() => () => {
+    canvasRef.current?._ro?.disconnect()
+    canvasRef.current?.dispose()
+    canvasRef.current = null // allow re-attach (e.g. React StrictMode remount)
   }, [])
 
-  useEffect(() => () => canvasRef.current?.dispose(), [])
+  // toggle drawing/selection mode when the active tool changes
+  useEffect(() => {
+    const c = canvasRef.current
+    if (!c) return
+    if (tool === 'pen') {
+      c.isDrawingMode = true
+      const b = new PencilBrush(c); b.color = markupColor; b.width = markupWidth
+      c.freeDrawingBrush = b
+    } else {
+      c.isDrawingMode = false
+    }
+    // shape tools draw on empty space without grabbing existing objects
+    c.skipTargetFind = !!tool && tool !== 'pen'
+    c.selection = !tool
+  }, [tool, markupColor, markupWidth, ready])
 
   // ------------------------------------------------------------- history/undo
   const pushHistory = useCallback(() => {
     const c = canvasRef.current
     if (!c) return
-    historyRef.current.push(JSON.stringify(serializeAll(c)))
-    if (historyRef.current.length > 50) historyRef.current.shift()
+    historyRef.current.push(JSON.stringify(c.getObjects().map((o) => o.toObject(PERSIST_PROPS))))
+    if (historyRef.current.length > 60) historyRef.current.shift()
   }, [])
 
-  const undo = useCallback(() => {
+  const undo = useCallback(async () => {
     const c = canvasRef.current
     if (!c || historyRef.current.length === 0) return
-    historyRef.current.pop() // drop current state
+    historyRef.current.pop()
     const prev = historyRef.current[historyRef.current.length - 1]
-    const specs = prev ? JSON.parse(prev) : []
-    c.getObjects()
-      .filter((o) => o.stickerType === 'price_tag')
-      .forEach((o) => c.remove(o))
-    specs.forEach((s) => c.add(createStickerObject(s)))
-    c.discardActiveObject()
-    c.requestRenderAll()
-    setActiveSpec(null)
+    c.getObjects().slice().forEach((o) => c.remove(o))
+    if (prev) {
+      const objs = await util.enlivenObjects(JSON.parse(prev))
+      objs.forEach((o) => c.add(o))
+    }
+    c.discardActiveObject(); c.requestRenderAll()
+    setActiveSpec(null); setActiveMarkup(null)
   }, [])
 
   // ------------------------------------------------------------- load image
-  const loadImageFromUrl = useCallback(async (url, naturalHint) => {
+  const setBackground = useCallback(async (url, opts = {}) => {
     const c = canvasRef.current
     if (!c) return
+    if (opts.clear) c.getObjects().slice().forEach((o) => c.remove(o))
     const img = await FabricImage.fromURL(url, { crossOrigin: 'anonymous' })
-    const natW = naturalHint?.w || img.width
-    const containerW = elRef.current?.parentElement?.clientWidth || MAX_DISPLAY
-    const maxW = Math.min(MAX_DISPLAY, containerW)
-    // Fit within the available width and the max display height; never upscale
-    // (cap at 1) so the export multiplier stays >= 1 (true original resolution).
-    const scale = Math.min(maxW / img.width, MAX_DISPLAY / img.height, 1)
-    const cw = Math.round(img.width * scale)
-    const ch = Math.round(img.height * scale)
-    c.setDimensions({ width: cw, height: ch })
-    img.set({ scaleX: scale, scaleY: scale, originX: 'left', originY: 'top', left: 0, top: 0 })
+    img.set({ originX: 'left', originY: 'top', left: 0, top: 0 })
     c.backgroundImage = img
-    imageScaleRef.current = natW / cw
-    c.setViewportTransform([1, 0, 0, 1, 0, 0])
-    c.requestRenderAll()
+    fitToContainer(false)
     setHasImage(true)
     historyRef.current = []
     pushHistory()
-  }, [pushHistory])
+  }, [fitToContainer, pushHistory])
 
   const loadImageFromFile = useCallback(async (file) => {
     originalFileRef.current = file
-    const url = URL.createObjectURL(file)
-    await loadImageFromUrl(url)
+    setProjectId(null)
+    await setBackground(URL.createObjectURL(file), { clear: true })
     setStatus('Image loaded')
-  }, [loadImageFromUrl])
+  }, [setBackground])
+
+  // open a saved image (from the gallery) into a fresh canvas
+  const openImageUrl = useCallback(async (url) => {
+    originalFileRef.current = null
+    setProjectId(null)
+    await setBackground(url, { clear: true })
+    setStatus('Opened saved image')
+  }, [setBackground])
 
   // ------------------------------------------------------------- stickers
   const centerPoint = () => {
@@ -160,12 +298,11 @@ export function useEditor() {
   const addSticker = useCallback((partial = {}) => {
     const c = canvasRef.current
     if (!c) return
+    setTool(null)
     const p = centerPoint()
     const obj = createStickerObject({ x: p.x, y: p.y, ...partial })
-    c.add(obj)
-    c.setActiveObject(obj)
-    c.requestRenderAll()
-    setActiveSpec(serializeSticker(obj))
+    c.add(obj); c.setActiveObject(obj); c.requestRenderAll()
+    setActiveSpec(serializeSticker(obj)); setActiveMarkup(null)
     pushHistory()
   }, [pushHistory])
 
@@ -174,17 +311,14 @@ export function useEditor() {
     if (t) addSticker({ ...t })
   }, [addSticker])
 
-  // Style edits (text/colors/shape/font) -> rebuild active sticker in place.
   const updateStyle = useCallback((patch) => {
     const c = canvasRef.current
     const o = c?.getActiveObject()
     if (!o || o.stickerType !== 'price_tag') return
     o.spec = { ...o.spec, ...patch }
-    const next = rebuildStickerObject(c, o)
-    setActiveSpec(serializeSticker(next))
+    setActiveSpec(serializeSticker(rebuildStickerObject(c, o)))
   }, [])
 
-  // Geometry edits (rotation/opacity) -> mutate the Fabric object directly.
   const updateGeom = useCallback((patch) => {
     const c = canvasRef.current
     const o = c?.getActiveObject()
@@ -192,58 +326,138 @@ export function useEditor() {
     if (patch.rotation != null) o.rotate(patch.rotation)
     if (patch.opacity != null) o.set('opacity', patch.opacity)
     if (patch.scale != null) o.set({ scaleX: patch.scale, scaleY: patch.scale })
-    o.setCoords()
-    c.requestRenderAll()
-    setActiveSpec(serializeSticker(o))
+    o.setCoords(); c.requestRenderAll()
+    if (o.stickerType === 'price_tag') setActiveSpec(serializeSticker(o))
   }, [])
+
+  // ------------------------------------------------------------- markup style
+  const updateMarkup = useCallback((patch) => {
+    const c = canvasRef.current
+    const o = c?.getActiveObject()
+    const color = patch.color ?? markupColor
+    const width = patch.width ?? markupWidth
+    if (patch.color != null) setMarkupColor(patch.color)
+    if (patch.width != null) setMarkupWidth(patch.width)
+    if (o && o.markup) {
+      applyMarkupStyle(o, { color, width })
+      c.requestRenderAll()
+      setActiveMarkup({ color, width })
+    }
+  }, [markupColor, markupWidth])
 
   const commit = useCallback(() => pushHistory(), [pushHistory])
 
   const bringForward = useCallback(() => {
-    const c = canvasRef.current
-    const o = c?.getActiveObject()
+    const c = canvasRef.current; const o = c?.getActiveObject()
     if (o) { c.bringObjectForward(o); c.requestRenderAll(); pushHistory() }
   }, [pushHistory])
-
   const sendBackward = useCallback(() => {
-    const c = canvasRef.current
-    const o = c?.getActiveObject()
-    // keep stickers above the background image
+    const c = canvasRef.current; const o = c?.getActiveObject()
     if (o) { c.sendObjectBackwards(o); c.requestRenderAll(); pushHistory() }
   }, [pushHistory])
 
   const duplicateActive = useCallback(() => {
-    const c = canvasRef.current
-    const o = c?.getActiveObject()
-    if (!o || o.stickerType !== 'price_tag') return
-    const s = serializeSticker(o)
-    addSticker({ ...s, id: undefined, x: s.x + 24, y: s.y + 24 })
-  }, [addSticker])
+    const c = canvasRef.current; const o = c?.getActiveObject()
+    if (o?.stickerType === 'price_tag') {
+      const s = serializeSticker(o)
+      addSticker({ ...s, id: undefined, x: s.x + 24, y: s.y + 24 })
+    } else if (o?.markup) {
+      o.clone(PERSIST_PROPS).then((cl) => {
+        cl.set({ left: o.left + 20, top: o.top + 20 })
+        c.add(cl); c.setActiveObject(cl); c.requestRenderAll(); pushHistory()
+      })
+    }
+  }, [addSticker, pushHistory])
 
   const deleteActive = useCallback(() => {
     const c = canvasRef.current
-    const o = c?.getActiveObject()
-    if (!o) return
-    c.remove(o)
-    c.discardActiveObject()
-    c.requestRenderAll()
-    setActiveSpec(null)
-    pushHistory()
+    const objs = c?.getActiveObjects?.() || []
+    if (!objs.length) { const o = c?.getActiveObject(); if (o) objs.push(o) }
+    if (!objs.length) return
+    objs.forEach((o) => c.remove(o))
+    c.discardActiveObject(); c.requestRenderAll()
+    setActiveSpec(null); setActiveMarkup(null); pushHistory()
+  }, [pushHistory])
+
+  const clearMarkup = useCallback(() => {
+    const c = canvasRef.current
+    if (!c) return
+    c.getObjects().filter((o) => o.markup).forEach((o) => c.remove(o))
+    c.discardActiveObject(); c.requestRenderAll(); setActiveMarkup(null); pushHistory()
   }, [pushHistory])
 
   // ------------------------------------------------------------- zoom
   const zoomBy = useCallback((factor) => {
-    const c = canvasRef.current
-    if (!c) return
-    let zoom = Math.min(5, Math.max(0.2, c.getZoom() * factor))
+    const c = canvasRef.current; if (!c) return
+    const zoom = Math.min(6, Math.max(0.2, c.getZoom() * factor))
     c.zoomToPoint(new Point(c.getWidth() / 2, c.getHeight() / 2), zoom)
   }, [])
   const resetZoom = useCallback(() => {
-    const c = canvasRef.current
-    if (!c) return
-    c.setViewportTransform([1, 0, 0, 1, 0, 0])
-    c.requestRenderAll()
+    const c = canvasRef.current; if (!c) return
+    c.setViewportTransform([1, 0, 0, 1, 0, 0]); c.requestRenderAll()
   }, [])
+
+  // ------------------------------------------------------------- crop
+  const startCrop = useCallback(() => {
+    const c = canvasRef.current
+    if (!c || !c.backgroundImage) return
+    resetZoom()
+    setTool(null)
+    const w = c.getWidth(); const h = c.getHeight()
+    const rect = new Rect({
+      left: w * 0.12, top: h * 0.12, width: w * 0.76, height: h * 0.76,
+      fill: 'rgba(0,0,0,0.15)', stroke: '#22c55e', strokeWidth: 2,
+      strokeDashArray: [8, 5], strokeUniform: true,
+      cornerColor: '#22c55e', transparentCorners: false, excludeFromExport: true,
+    })
+    rect.isCropRect = true
+    cropRectRef.current = rect
+    c.add(rect); c.setActiveObject(rect); c.requestRenderAll()
+    setCropMode(true)
+  }, [resetZoom])
+
+  const cancelCrop = useCallback(() => {
+    const c = canvasRef.current
+    if (cropRectRef.current) { c.remove(cropRectRef.current); cropRectRef.current = null }
+    c?.requestRenderAll(); setCropMode(false)
+  }, [])
+
+  const applyCrop = useCallback(async () => {
+    const c = canvasRef.current
+    const rect = cropRectRef.current
+    const bg = c?.backgroundImage
+    if (!c || !rect || !bg) return
+    const r = rect.getBoundingRect()
+    const sc = imageScaleRef.current
+    const imgEl = bg.getElement()
+    // source region in natural pixels, clamped
+    const sx = Math.max(0, Math.round(r.left * sc))
+    const sy = Math.max(0, Math.round(r.top * sc))
+    const sw = Math.min(imgEl.naturalWidth - sx, Math.round(r.width * sc))
+    const sh = Math.min(imgEl.naturalHeight - sy, Math.round(r.height * sc))
+
+    const off = document.createElement('canvas')
+    off.width = sw; off.height = sh
+    off.getContext('2d').drawImage(imgEl, sx, sy, sw, sh, 0, 0, sw, sh)
+
+    // translate overlays so they stay aligned with the cropped region
+    c.remove(rect); cropRectRef.current = null
+    c.getObjects().forEach((o) => {
+      o.set({ left: o.left - r.left, top: o.top - r.top }); o.setCoords()
+    })
+    const cropped = await FabricImage.fromURL(off.toDataURL('image/png'))
+    cropped.set({ originX: 'left', originY: 'top', left: 0, top: 0 })
+    c.backgroundImage = cropped
+    // Baseline the canvas to the crop region's display size so fitToContainer
+    // rescales the (already-translated) overlays from the correct reference.
+    c.setDimensions({ width: Math.round(r.width), height: Math.round(r.height) })
+    cropped.set({ scaleX: r.width / sw, scaleY: r.height / sh })
+    imageScaleRef.current = sw / r.width
+    setCropMode(false)
+    fitToContainer(true)
+    pushHistory()
+    setStatus('Cropped')
+  }, [fitToContainer, pushHistory])
 
   // ------------------------------------------------------------- export
   const renderDataUrl = useCallback((format = 'png') => {
@@ -251,31 +465,23 @@ export function useEditor() {
     if (!c) return null
     const saved = c.viewportTransform.slice()
     c.setViewportTransform([1, 0, 0, 1, 0, 0])
-    c.discardActiveObject()
-    c.requestRenderAll()
+    c.discardActiveObject(); c.requestRenderAll()
     const dataUrl = c.toDataURL({
       format: format === 'jpg' ? 'jpeg' : 'png',
-      quality: 0.92,
-      multiplier: imageScaleRef.current, // restore original resolution
+      quality: 0.92, multiplier: imageScaleRef.current,
     })
-    c.setViewportTransform(saved)
-    c.requestRenderAll()
+    c.setViewportTransform(saved); c.requestRenderAll()
     return dataUrl
   }, [])
 
-  const dataUrlToBlob = (dataUrl) => fetch(dataUrl).then((r) => r.blob())
+  const dataUrlToBlob = (d) => fetch(d).then((r) => r.blob())
 
   const exportImage = useCallback(async (format = 'png') => {
     const dataUrl = renderDataUrl(format)
     if (!dataUrl) return
-    // trigger download
     const a = document.createElement('a')
-    a.href = dataUrl
-    a.download = `pricetag-${Date.now()}.${format}`
-    a.click()
+    a.href = dataUrl; a.download = `pricetag-${Date.now()}.${format}`; a.click()
     setStatus('Image downloaded')
-
-    // also persist to Supabase (best-effort)
     if (isSupabaseConfigured) {
       try {
         setStatus('Uploading export…')
@@ -284,67 +490,42 @@ export function useEditor() {
         let originalUrl = null
         if (originalFileRef.current) originalUrl = await uploadOriginal(originalFileRef.current)
         const res = await saveProject({
-          id: projectId,
-          originalImageUrl: originalUrl,
-          finalImageUrl: finalUrl,
-          stickerJson: serializeAll(canvasRef.current),
+          id: projectId, originalImageUrl: originalUrl,
+          finalImageUrl: finalUrl, stickerJson: serializeAll(canvasRef.current),
         })
         if (res.ok) { setProjectId(res.project.id); setStatus('Saved to Supabase ✓') }
         else setStatus(`Saved locally (Supabase: ${res.reason})`)
-      } catch (err) {
-        setStatus(`Export saved locally (upload failed: ${err.message})`)
-      }
+      } catch (err) { setStatus(`Export saved locally (upload failed: ${err.message})`) }
     }
   }, [renderDataUrl, projectId])
 
-  // ------------------------------------------------------------- save only
   const save = useCallback(async () => {
     const c = canvasRef.current
     if (!c) return
-    if (!isSupabaseConfigured) {
-      setStatus('Add Supabase keys in .env to enable saving')
-      return
-    }
+    if (!isSupabaseConfigured) { setStatus('Supabase not configured'); return }
     try {
       setStatus('Saving…')
       let originalUrl = null
       if (originalFileRef.current) originalUrl = await uploadOriginal(originalFileRef.current)
       const res = await saveProject({
-        id: projectId,
-        originalImageUrl: originalUrl,
-        stickerJson: serializeAll(c),
+        id: projectId, originalImageUrl: originalUrl, stickerJson: serializeAll(c),
       })
       if (res.ok) { setProjectId(res.project.id); setStatus('Project saved ✓') }
       else setStatus(`Save failed: ${res.reason}`)
-    } catch (err) {
-      setStatus(`Save failed: ${err.message}`)
-    }
+    } catch (err) { setStatus(`Save failed: ${err.message}`) }
   }, [projectId])
 
+  const fetchGallery = useCallback(() => listProjects(), [])
+
   return {
-    attach,
-    ready,
-    hasImage,
-    activeSpec,
-    snap,
-    setSnap,
-    status,
+    attach, ready, hasImage, activeSpec, activeMarkup, snap, setSnap, status,
+    tool, setTool, markupColor, markupWidth, cropMode,
     api: {
-      loadImageFromFile,
-      addSticker,
-      applyTemplate,
-      updateStyle,
-      updateGeom,
-      commit,
-      bringForward,
-      sendBackward,
-      duplicateActive,
-      deleteActive,
-      undo,
-      zoomBy,
-      resetZoom,
-      exportImage,
-      save,
+      loadImageFromFile, openImageUrl, addSticker, applyTemplate,
+      updateStyle, updateGeom, updateMarkup, commit,
+      bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup,
+      undo, zoomBy, resetZoom, exportImage, save, fetchGallery,
+      startCrop, applyCrop, cancelCrop,
     },
   }
 }

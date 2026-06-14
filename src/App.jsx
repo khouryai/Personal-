@@ -2,20 +2,20 @@ import React, { useEffect, useRef, useState } from 'react'
 import { useEditor } from './hooks/useEditor.js'
 import PropertiesPanel from './components/PropertiesPanel.jsx'
 import TemplatePanel from './components/TemplatePanel.jsx'
+import MarkupBar from './components/MarkupBar.jsx'
+import Gallery from './components/Gallery.jsx'
 import { isSupabaseConfigured } from './lib/supabase.js'
 
 export default function App() {
   const ed = useEditor()
   const fileRef = useRef(null)
-  // mobile bottom-sheet: null | 'templates' | 'properties'
-  const [sheet, setSheet] = useState(null)
+  const [sheet, setSheet] = useState(null) // null|'templates'|'markup'|'properties'
+  const [gallery, setGallery] = useState(false)
 
-  // open the properties sheet automatically when a sticker is selected on mobile
   useEffect(() => {
     if (ed.activeSpec && window.innerWidth <= 820) setSheet('properties')
   }, [ed.activeSpec?.id])
 
-  // keyboard shortcuts
   useEffect(() => {
     const onKey = (e) => {
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return
@@ -23,10 +23,11 @@ export default function App() {
       if (mod && e.key.toLowerCase() === 'z') { e.preventDefault(); ed.api.undo() }
       else if (mod && e.key.toLowerCase() === 'd') { e.preventDefault(); ed.api.duplicateActive() }
       else if (e.key === 'Delete' || e.key === 'Backspace') { ed.api.deleteActive() }
+      else if (e.key === 'Escape' && ed.cropMode) { ed.api.cancelCrop() }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [ed.api])
+  }, [ed.api, ed.cropMode])
 
   const onFile = (e) => {
     const f = e.target.files?.[0]
@@ -34,12 +35,45 @@ export default function App() {
     e.target.value = ''
   }
 
+  const rightPanel = (
+    <>
+      {ed.activeSpec && <PropertiesPanel spec={ed.activeSpec} api={ed.api} />}
+      {!ed.activeSpec && ed.activeMarkup && (
+        <div className="props">
+          <label className="field">
+            <span>Markup color</span>
+            <input type="color" value={ed.activeMarkup.color}
+              onChange={(e) => ed.api.updateMarkup({ color: e.target.value })} />
+          </label>
+          <label className="field">
+            <span>Stroke width — {ed.activeMarkup.width}px</span>
+            <input type="range" min="1" max="24" value={ed.activeMarkup.width}
+              onChange={(e) => ed.api.updateMarkup({ width: +e.target.value })}
+              onMouseUp={ed.api.commit} onTouchEnd={ed.api.commit} />
+          </label>
+          <div className="field layer-row">
+            <button className="btn" onClick={ed.api.sendBackward}>⬇ Back</button>
+            <button className="btn" onClick={ed.api.bringForward}>⬆ Forward</button>
+          </div>
+          <div className="field layer-row">
+            <button className="btn" onClick={ed.api.duplicateActive}>⧉ Duplicate</button>
+            <button className="btn danger" onClick={ed.api.deleteActive}>🗑 Delete</button>
+          </div>
+        </div>
+      )}
+      {!ed.activeSpec && !ed.activeMarkup && (
+        <div className="panel-empty">Select a sticker or markup to edit it.</div>
+      )}
+    </>
+  )
+
   return (
     <div className="app">
       <header className="topbar">
         <div className="brand">🏷️ PriceTag Studio</div>
         <div className="top-actions">
           {ed.status && <span className="status">{ed.status}</span>}
+          <button className="btn ghost" onClick={() => setGallery(true)}>Saved</button>
           <button className="btn ghost" onClick={ed.api.save} disabled={!ed.hasImage}>Save</button>
           <button className="btn primary" onClick={() => ed.api.exportImage('png')} disabled={!ed.hasImage}>
             Download
@@ -51,9 +85,18 @@ export default function App() {
         {/* LEFT TOOLS (desktop) */}
         <aside className="tools">
           <button className="tool" onClick={() => fileRef.current?.click()}>📷 Upload</button>
-          <button className="tool" onClick={() => ed.api.addSticker()} disabled={!ed.hasImage}>➕ Sticker</button>
+          <div className="tool-grid">
+            <button className="btn" onClick={() => ed.api.addSticker()} disabled={!ed.hasImage}>➕ Sticker</button>
+            <button className="btn" onClick={ed.api.startCrop} disabled={!ed.hasImage}>✂ Crop</button>
+          </div>
+
+          <div className="tool-section-label">Markup</div>
+          <MarkupBar tool={ed.tool} setTool={ed.setTool}
+            markupColor={ed.markupColor} markupWidth={ed.markupWidth} api={ed.api} />
+
           <div className="tool-section-label">Templates</div>
           <TemplatePanel api={ed.api} />
+
           <div className="tool-section-label">Canvas</div>
           <div className="tool-grid">
             <button className="btn" onClick={() => ed.api.zoomBy(1.2)} disabled={!ed.hasImage}>＋</button>
@@ -80,18 +123,24 @@ export default function App() {
                 <div className="dz-inner">
                   <div className="dz-icon">📷</div>
                   <strong>Upload a photo</strong>
-                  <span>Tap to choose an image, then add price-tag stickers</span>
+                  <span>Tap to choose an image, then add price tags & markup</span>
                 </div>
               </div>
             )}
+            {ed.cropMode && (
+              <div className="crop-bar">
+                <span>Drag the box to set the crop</span>
+                <button className="btn primary" onClick={ed.api.applyCrop}>Apply</button>
+                <button className="btn ghost" onClick={ed.api.cancelCrop}>Cancel</button>
+              </div>
+            )}
           </div>
-          <p className="hint">Drag to move · corner handles to resize · top handle to rotate · Alt-drag / pinch to pan · scroll to zoom</p>
         </main>
 
         {/* RIGHT PROPERTIES (desktop) */}
         <aside className="properties-panel">
           <div className="panel-title">Properties</div>
-          <PropertiesPanel spec={ed.activeSpec} api={ed.api} />
+          {rightPanel}
         </aside>
       </div>
 
@@ -99,7 +148,9 @@ export default function App() {
       <nav className="bottombar">
         <button onClick={() => fileRef.current?.click()}>📷<span>Upload</span></button>
         <button onClick={() => ed.api.addSticker()} disabled={!ed.hasImage}>➕<span>Sticker</span></button>
-        <button onClick={() => setSheet('templates')} disabled={!ed.hasImage}>🏷️<span>Templates</span></button>
+        <button onClick={() => setSheet('markup')} disabled={!ed.hasImage}>✎<span>Markup</span></button>
+        <button onClick={ed.api.startCrop} disabled={!ed.hasImage}>✂<span>Crop</span></button>
+        <button onClick={() => setSheet('templates')} disabled={!ed.hasImage}>🏷️<span>Tags</span></button>
         <button onClick={ed.api.undo} disabled={!ed.hasImage}>↶<span>Undo</span></button>
         <button onClick={() => ed.api.exportImage('png')} disabled={!ed.hasImage}>⬇<span>Export</span></button>
       </nav>
@@ -109,27 +160,32 @@ export default function App() {
         <div className="sheet-backdrop" onClick={() => setSheet(null)}>
           <div className="sheet" onClick={(e) => e.stopPropagation()}>
             <div className="sheet-handle" />
-            {sheet === 'templates' && (
-              <>
-                <div className="sheet-title">Templates</div>
-                <TemplatePanel api={ed.api} onPick={() => setSheet('properties')} />
-              </>
-            )}
-            {sheet === 'properties' && (
-              <>
-                <div className="sheet-title">Edit sticker</div>
-                <PropertiesPanel spec={ed.activeSpec} api={ed.api} />
-              </>
-            )}
+            {sheet === 'templates' && (<>
+              <div className="sheet-title">Templates</div>
+              <TemplatePanel api={ed.api} onPick={() => setSheet(null)} />
+            </>)}
+            {sheet === 'markup' && (<>
+              <div className="sheet-title">Markup tools</div>
+              <MarkupBar tool={ed.tool} setTool={ed.setTool}
+                markupColor={ed.markupColor} markupWidth={ed.markupWidth} api={ed.api} />
+            </>)}
+            {sheet === 'properties' && (<>
+              <div className="sheet-title">Edit</div>
+              {rightPanel}
+            </>)}
           </div>
         </div>
+      )}
+
+      {gallery && (
+        <Gallery api={ed.api} onClose={() => setGallery(false)} onOpen={ed.api.openImageUrl} />
       )}
 
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />
 
       {!isSupabaseConfigured && (
         <div className="config-banner">
-          Supabase not configured — editing & export work locally. Add keys in <code>.env</code> to save projects.
+          Supabase not configured — editing & export work locally. Add keys in <code>.env</code> to save.
         </div>
       )}
     </div>
