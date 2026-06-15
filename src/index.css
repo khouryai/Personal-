@@ -146,9 +146,26 @@ body {
 }
 .config-banner code { background: rgba(0,0,0,.3); padding: 1px 4px; border-radius: 4px; }
 
+/* docked editor (mobile): occupies the bottom, photo stays visible above it */
+.mobile-editor {
+  flex: 0 0 auto;
+  max-height: 38dvh;
+  overflow: auto;
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  padding: 8px 14px 12px;
+}
+.me-head {
+  position: sticky; top: 0; z-index: 1;
+  display: flex; align-items: center; justify-content: space-between;
+  background: var(--panel); padding: 2px 0 8px; margin-bottom: 2px;
+}
+.me-head strong { font-size: 13px; }
+.mobile-editor .props { gap: 10px; }
+
 /* ---------- desktop ---------- */
 @media (min-width: 821px) {
-  .bottombar, .sheet-backdrop { display: none; }
+  .bottombar, .sheet-backdrop, .mobile-editor { display: none; }
   .tools, .properties-panel {
     display: flex; flex-direction: column; gap: 10px; width: 210px; flex: 0 0 210px;
     background: var(--panel); padding: 14px; overflow: auto;

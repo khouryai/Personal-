@@ -441,6 +441,13 @@ export function useEditor() {
     c.discardActiveObject(); c.requestRenderAll(); setActiveMarkup(null); pushHistory()
   }, [pushHistory])
 
+  const deselect = useCallback(() => {
+    const c = canvasRef.current
+    if (!c) return
+    c.discardActiveObject(); c.requestRenderAll()
+    setActiveSpec(null); setActiveMarkup(null)
+  }, [])
+
   // ------------------------------------------------------------- zoom
   const zoomBy = useCallback((factor) => {
     const c = canvasRef.current; if (!c) return
@@ -620,7 +627,7 @@ export function useEditor() {
     api: {
       loadImageFromFile, openImageUrl, openProject, addSticker, applyTemplate,
       updateStyle, updateGeom, updateMarkup, fitSticker, commit,
-      bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup,
+      bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup, deselect,
       undo, zoomBy, resetZoom, exportImage, save, fetchGallery,
       startCrop, applyCrop, cancelCrop,
     },

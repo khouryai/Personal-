@@ -9,12 +9,8 @@ import { isSupabaseConfigured } from './lib/supabase.js'
 export default function App() {
   const ed = useEditor()
   const fileRef = useRef(null)
-  const [sheet, setSheet] = useState(null) // null|'templates'|'markup'|'properties'
+  const [sheet, setSheet] = useState(null) // null|'templates'|'markup'
   const [gallery, setGallery] = useState(false)
-
-  useEffect(() => {
-    if (ed.activeSpec && window.innerWidth <= 820) setSheet('properties')
-  }, [ed.activeSpec?.id])
 
   useEffect(() => {
     const onKey = (e) => {
@@ -144,6 +140,17 @@ export default function App() {
         </aside>
       </div>
 
+      {/* DOCKED EDITOR (mobile) — pushes the photo up instead of covering it */}
+      {(ed.activeSpec || ed.activeMarkup) && (
+        <section className="mobile-editor">
+          <div className="me-head">
+            <strong>{ed.activeSpec ? 'Edit sticker' : 'Edit markup'}</strong>
+            <button className="btn primary small" onClick={ed.api.deselect}>Done</button>
+          </div>
+          {rightPanel}
+        </section>
+      )}
+
       {/* BOTTOM TOOLBAR (mobile) */}
       <nav className="bottombar">
         <button onClick={() => fileRef.current?.click()}>📷<span>Upload</span></button>
@@ -168,10 +175,6 @@ export default function App() {
               <div className="sheet-title">Markup tools</div>
               <MarkupBar tool={ed.tool} setTool={ed.setTool}
                 markupColor={ed.markupColor} markupWidth={ed.markupWidth} api={ed.api} />
-            </>)}
-            {sheet === 'properties' && (<>
-              <div className="sheet-title">Edit</div>
-              {rightPanel}
             </>)}
           </div>
         </div>
