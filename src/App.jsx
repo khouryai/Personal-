@@ -118,8 +118,14 @@ export default function App() {
               <div className="dropzone" onClick={() => fileRef.current?.click()}>
                 <div className="dz-inner">
                   <div className="dz-icon">📷</div>
-                  <strong>Upload a photo</strong>
-                  <span>Tap to choose an image, then add price tags & markup</span>
+                  <strong>Click here to upload a photo</strong>
+                  <span>Then add price tags, markup &amp; export your image</span>
+                  <button
+                    className="btn primary dz-btn"
+                    onClick={(e) => { e.stopPropagation(); fileRef.current?.click() }}
+                  >
+                    Choose Image
+                  </button>
                 </div>
               </div>
             )}

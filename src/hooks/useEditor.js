@@ -99,6 +99,12 @@ export function useEditor() {
     })
     canvasRef.current = canvas
 
+    // Give the empty canvas a real size so the upload call-to-action fills the
+    // stage (instead of a tiny default box) before any image is loaded.
+    const initW = Math.max(200, (stageRef.current?.clientWidth || 400) - 16)
+    const initH = Math.max(200, (stageRef.current?.clientHeight || 400) - 16)
+    canvas.setDimensions({ width: initW, height: initH })
+
     const sync = () => {
       const o = canvas.getActiveObject()
       if (o && o.stickerType === 'price_tag') {

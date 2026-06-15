@@ -52,11 +52,13 @@ body {
 .dropzone {
   position: absolute; inset: 0; display: grid; place-items: center; cursor: pointer;
   background: linear-gradient(135deg, #1e293b, #0f172a);
-  min-width: 86vw; min-height: 50vh;
+  border: 2px dashed var(--line); border-radius: 12px;
 }
-.dz-inner { display: grid; gap: 6px; justify-items: center; text-align: center; padding: 24px; }
-.dz-icon { font-size: 40px; }
-.dz-inner span { color: var(--muted); font-size: 13px; max-width: 240px; }
+.dz-inner { display: grid; gap: 10px; justify-items: center; text-align: center; padding: 24px; }
+.dz-icon { font-size: 48px; }
+.dz-inner strong { font-size: 18px; }
+.dz-inner span { color: var(--muted); font-size: 13px; max-width: 260px; }
+.dz-btn { margin-top: 6px; font-size: 15px; padding: 11px 22px; }
 
 /* ---------- buttons ---------- */
 .btn, .tool {
