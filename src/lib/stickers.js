@@ -35,7 +35,8 @@ export const DEFAULT_STICKER = {
   shape: 'rounded_rect',
   opacity: 1,
   shadow: null,
-  boxW: null, // fixed shape box size; null = auto-fit to text once
+  pad: 8,     // padding between text and shape edge (tightness)
+  boxW: null, // fixed shape box size; null = auto-fit to text using `pad`
   boxH: null,
 }
 
@@ -79,10 +80,9 @@ function buildChildren(spec) {
   })
 
   const tw = itext.width, th = itext.height
-  const padX = Math.max(18, fontSize * 0.55)
-  const padY = Math.max(12, fontSize * 0.4)
-  const boxW = spec.boxW ?? Math.round(tw + padX * 2)
-  const boxH = spec.boxH ?? Math.round(th + padY * 2)
+  const pad = spec.pad ?? 8
+  const boxW = spec.boxW ?? Math.round(tw + pad * 2)
+  const boxH = spec.boxH ?? Math.round(th + pad * 2)
   const children = []
   const fill = { fill: bgColor, originX: 'center', originY: 'center', left: 0, top: 0, shadow }
 
@@ -127,7 +127,7 @@ export function createStickerObject(partial) {
     text: spec.text, fontSize: spec.fontSize, fontWeight: spec.fontWeight,
     textColor: spec.textColor, bgColor: spec.bgColor, shape: spec.shape,
     shadow: spec.shadow, textAngle: spec.textAngle || 0,
-    boxW: spec.boxW ?? null, boxH: spec.boxH ?? null,
+    pad: spec.pad ?? 8, boxW: spec.boxW ?? null, boxH: spec.boxH ?? null,
   }
   const { children, boxW, boxH } = buildChildren(styleSpec)
   styleSpec.boxW = boxW // persist the fixed box so future edits keep the size
@@ -197,6 +197,7 @@ export function serializeSticker(g) {
     shape: g.spec.shape,
     opacity: round(g.opacity ?? 1),
     shadow: g.spec.shadow || null,
+    pad: g.spec.pad ?? 8,
     boxW: g.spec.boxW ?? null,
     boxH: g.spec.boxH ?? null,
   }

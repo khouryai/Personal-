@@ -62,15 +62,21 @@ on conflict (id) do nothing;
 -- Public read + anonymous upload for both buckets (MVP, no auth).
 drop policy if exists "Public read images"   on storage.objects;
 drop policy if exists "Public upload images" on storage.objects;
+drop policy if exists "Public delete images" on storage.objects;
 drop policy if exists "Public read exports"   on storage.objects;
 drop policy if exists "Public upload exports" on storage.objects;
+drop policy if exists "Public delete exports" on storage.objects;
 
 create policy "Public read images" on storage.objects
   for select using (bucket_id = 'images');
 create policy "Public upload images" on storage.objects
   for insert with check (bucket_id = 'images');
+create policy "Public delete images" on storage.objects
+  for delete using (bucket_id = 'images');
 
 create policy "Public read exports" on storage.objects
   for select using (bucket_id = 'exports');
 create policy "Public upload exports" on storage.objects
   for insert with check (bucket_id = 'exports');
+create policy "Public delete exports" on storage.objects
+  for delete using (bucket_id = 'exports');

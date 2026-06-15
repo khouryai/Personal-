@@ -38,3 +38,34 @@ export async function loadProject(id) {
   if (error) return { ok: false, reason: error.message }
   return { ok: true, project: data }
 }
+
+// Extract { bucket, path } from a Supabase public storage URL.
+function parseStorageUrl(url) {
+  if (!url) return null
+  const m = String(url).match(/\/storage\/v1\/object\/public\/([^/]+)\/(.+)$/)
+  return m ? { bucket: m[1], path: decodeURIComponent(m[2]) } : null
+}
+
+// Permanently delete a project: its storage files (original/final/background)
+// and the database row.
+export async function deleteProject(id) {
+  if (!isSupabaseConfigured) return { ok: false, reason: 'supabase-not-configured' }
+  const { data: p } = await supabase
+    .from('projects')
+    .select('original_image_url, final_image_url, scene_json')
+    .eq('id', id)
+    .single()
+  if (p) {
+    const byBucket = {}
+    ;[p.original_image_url, p.final_image_url, p.scene_json?.bg]
+      .map(parseStorageUrl)
+      .filter(Boolean)
+      .forEach((s) => { (byBucket[s.bucket] ||= []).push(s.path) })
+    for (const [bucket, paths] of Object.entries(byBucket)) {
+      try { await supabase.storage.from(bucket).remove(paths) } catch { /* best-effort */ }
+    }
+  }
+  const { error } = await supabase.from('projects').delete().eq('id', id)
+  if (error) return { ok: false, reason: error.message }
+  return { ok: true }
+}

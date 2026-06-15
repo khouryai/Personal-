@@ -14,7 +14,7 @@ import {
 } from '../lib/markup.js'
 import { TEMPLATES } from '../lib/templates.js'
 import { uploadOriginal, uploadExport } from '../lib/storage.js'
-import { saveProject, listProjects, loadProject } from '../lib/projects.js'
+import { saveProject, listProjects, loadProject, deleteProject } from '../lib/projects.js'
 import { isSupabaseConfigured } from '../lib/supabase.js'
 
 const GRID = 20
@@ -67,6 +67,7 @@ export function useEditor() {
     const ch = Math.round(natH * scale)
     const oldW = c.getWidth() || cw
     const ratio = cw / oldW
+    const savedVpt = c.viewportTransform.slice()
 
     if (refitObjects && Math.abs(ratio - 1) > 0.001) {
       c.getObjects().forEach((o) => {
@@ -80,7 +81,9 @@ export function useEditor() {
     c.setDimensions({ width: cw, height: ch })
     bg.set({ scaleX: cw / natW, scaleY: ch / natH })
     imageScaleRef.current = natW / cw
-    c.setViewportTransform([1, 0, 0, 1, 0, 0])
+    // Preserve the user's current zoom/pan on resize refits (e.g. when the
+    // mobile editor panel opens); only reset to fit on a fresh load.
+    c.setViewportTransform(refitObjects ? savedVpt : [1, 0, 0, 1, 0, 0])
     c.requestRenderAll()
   }, [])
 
@@ -363,8 +366,8 @@ export function useEditor() {
       return
     }
     o.spec = { ...o.spec, ...patch }
-    // Changing font size re-fits the shape; other style edits keep the box.
-    if ('fontSize' in patch) { o.spec.boxW = null; o.spec.boxH = null }
+    // Text size stays independent of shape size — the shape only re-fits when
+    // the user changes padding or taps "Fit shape to text" (those pass boxW/H null).
     setActiveSpec(serializeSticker(rebuildStickerObject(c, o)))
   }, [])
 
@@ -621,6 +624,12 @@ export function useEditor() {
 
   const fetchGallery = useCallback(() => listProjects(), [])
 
+  const removeProject = useCallback(async (id) => {
+    const res = await deleteProject(id)
+    if (res.ok && id === projectId) setProjectId(null)
+    return res
+  }, [projectId])
+
   return {
     attach, ready, hasImage, activeSpec, activeMarkup, snap, setSnap, status,
     tool, setTool, markupColor, markupWidth, cropMode,
@@ -628,7 +637,7 @@ export function useEditor() {
       loadImageFromFile, openImageUrl, openProject, addSticker, applyTemplate,
       updateStyle, updateGeom, updateMarkup, fitSticker, commit,
       bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup, deselect,
-      undo, zoomBy, resetZoom, exportImage, save, fetchGallery,
+      undo, zoomBy, resetZoom, exportImage, save, fetchGallery, deleteProject: removeProject,
       startCrop, applyCrop, cancelCrop,
     },
   }

@@ -3,6 +3,7 @@ import { isSupabaseConfigured } from '../lib/supabase.js'
 
 export default function Gallery({ api, onClose, onOpen }) {
   const [state, setState] = useState({ loading: true, projects: [], error: null })
+  const [busy, setBusy] = useState(null) // id being deleted
 
   useEffect(() => {
     let alive = true
@@ -45,6 +46,23 @@ export default function Gallery({ api, onClose, onOpen }) {
                   {img && (
                     <a className="btn" href={img} target="_blank" rel="noreferrer">View</a>
                   )}
+                  <button
+                    className="btn danger"
+                    disabled={busy === p.id}
+                    onClick={async () => {
+                      if (!window.confirm('Permanently delete this photo from storage? This cannot be undone.')) return
+                      setBusy(p.id)
+                      const res = await api.deleteProject(p.id)
+                      setBusy(null)
+                      if (res.ok) {
+                        setState((s) => ({ ...s, projects: s.projects.filter((x) => x.id !== p.id) }))
+                      } else {
+                        alert(`Delete failed: ${res.reason}`)
+                      }
+                    }}
+                  >
+                    {busy === p.id ? '…' : 'Delete'}
+                  </button>
                 </div>
               </div>
             )

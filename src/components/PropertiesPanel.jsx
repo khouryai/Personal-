@@ -25,7 +25,15 @@ export default function PropertiesPanel({ spec, api }) {
           onBlur={api.commit}
         />
       </label>
-      <button className="btn small" onClick={api.fitSticker}>⤢ Fit shape to text</button>
+      <label className="field">
+        <span>Shape tightness — {spec.pad ?? 8}px</span>
+        <input
+          type="range" min="0" max="40" value={spec.pad ?? 8}
+          onChange={(e) => set({ pad: +e.target.value, boxW: null, boxH: null })}
+          onMouseUp={api.commit} onTouchEnd={api.commit}
+        />
+      </label>
+      <button className="btn small" onClick={api.fitSticker}>⤢ Snap shape to text</button>
 
       <div className="field">
         <span>Shape</span>
