@@ -4,6 +4,7 @@ import PropertiesPanel from './components/PropertiesPanel.jsx'
 import TemplatePanel from './components/TemplatePanel.jsx'
 import MarkupBar from './components/MarkupBar.jsx'
 import Gallery from './components/Gallery.jsx'
+import SaveSheet from './components/SaveSheet.jsx'
 import { isSupabaseConfigured } from './lib/supabase.js'
 
 export default function App() {
@@ -11,6 +12,14 @@ export default function App() {
   const fileRef = useRef(null)
   const [sheet, setSheet] = useState(null) // null|'templates'|'markup'
   const [gallery, setGallery] = useState(false)
+  const [saveDesc, setSaveDesc] = useState(null) // pending export for the save sheet
+
+  // Render the image here, inside the tap, so the share sheet later opens with
+  // the file already in hand (iOS needs the gesture, not a promise chain).
+  const openSaveSheet = () => {
+    const desc = ed.api.prepareExport('png')
+    if (desc) setSaveDesc(desc)
+  }
 
   useEffect(() => {
     const onKey = (e) => {
@@ -71,8 +80,8 @@ export default function App() {
           {ed.status && <span className="status">{ed.status}</span>}
           <button className="btn ghost" onClick={() => setGallery(true)}>Saved</button>
           <button className="btn ghost" onClick={ed.api.save} disabled={!ed.hasImage}>Save</button>
-          <button className="btn primary" onClick={() => ed.api.exportImage('png')} disabled={!ed.hasImage}>
-            Download
+          <button className="btn primary" onClick={openSaveSheet} disabled={!ed.hasImage}>
+            Save / Download
           </button>
         </div>
       </header>
@@ -104,6 +113,10 @@ export default function App() {
             <input type="checkbox" checked={ed.snap} onChange={(e) => ed.setSnap(e.target.checked)} />
             <span>Snap to grid</span>
           </label>
+          <div className="tool-section-label">Save</div>
+          <button className="btn primary" onClick={openSaveSheet} disabled={!ed.hasImage}>
+            📤 Save to device…
+          </button>
           <div className="export-row">
             <button className="btn" onClick={() => ed.api.exportImage('png')} disabled={!ed.hasImage}>PNG</button>
             <button className="btn" onClick={() => ed.api.exportImage('jpg')} disabled={!ed.hasImage}>JPG</button>
@@ -165,7 +178,7 @@ export default function App() {
         <button onClick={ed.api.startCrop} disabled={!ed.hasImage}>✂<span>Crop</span></button>
         <button onClick={() => setSheet('templates')} disabled={!ed.hasImage}>🏷️<span>Tags</span></button>
         <button onClick={ed.api.undo} disabled={!ed.hasImage}>↶<span>Undo</span></button>
-        <button onClick={() => ed.api.exportImage('png')} disabled={!ed.hasImage}>⬇<span>Export</span></button>
+        <button onClick={openSaveSheet} disabled={!ed.hasImage}>⬇<span>Save</span></button>
       </nav>
 
       {/* MOBILE BOTTOM SHEET */}
@@ -188,6 +201,10 @@ export default function App() {
 
       {gallery && (
         <Gallery api={ed.api} onClose={() => setGallery(false)} onOpen={ed.api.openImageUrl} />
+      )}
+
+      {saveDesc && (
+        <SaveSheet desc={saveDesc} api={ed.api} onClose={() => setSaveDesc(null)} />
       )}
 
       <input ref={fileRef} type="file" accept="image/*" hidden onChange={onFile} />

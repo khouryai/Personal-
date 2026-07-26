@@ -16,6 +16,9 @@ import { TEMPLATES } from '../lib/templates.js'
 import { uploadOriginal, uploadExport } from '../lib/storage.js'
 import { saveProject, listProjects, loadProject, deleteProject } from '../lib/projects.js'
 import { isSupabaseConfigured } from '../lib/supabase.js'
+import {
+  dataUrlToBlob, makeFile, canShareFile, shareFile, downloadBlob, openBlobInTab,
+} from '../lib/download.js'
 
 const GRID = 20
 
@@ -562,8 +565,6 @@ export function useEditor() {
     return url
   }, [])
 
-  const dataUrlToBlob = (d) => fetch(d).then((r) => r.blob())
-
   // Upload the original photo once and reuse the URL across saves.
   const ensureOriginalUrl = useCallback(async () => {
     if (originalUrlRef.current) return originalUrlRef.current
@@ -580,30 +581,71 @@ export function useEditor() {
     return { v: 1, w: c.getWidth(), h: c.getHeight(), objects: c.getObjects().map((o) => o.toObject(PERSIST_PROPS)) }
   }, [])
 
-  const exportImage = useCallback(async (format = 'png') => {
+  // Render the finished image into a Blob + File, ready to hand to the OS.
+  // Synchronous on purpose — iOS Safari revokes the user activation that
+  // navigator.share() needs the moment we await something (see lib/download.js).
+  const prepareExport = useCallback((format = 'png') => {
     const dataUrl = renderDataUrl(format)
-    if (!dataUrl) return
-    const a = document.createElement('a')
-    a.href = dataUrl; a.download = `pricetag-${Date.now()}.${format}`; a.click()
-    setStatus('Image downloaded')
-    if (isSupabaseConfigured) {
-      try {
-        setStatus('Uploading export…')
-        const finalUrl = await uploadExport(await dataUrlToBlob(dataUrl), format)
-        const bgData = renderBackgroundDataUrl()
-        const bgUrl = bgData ? await uploadExport(await dataUrlToBlob(bgData), 'png') : null
-        const originalUrl = await ensureOriginalUrl()
-        const scene = buildScene(); if (scene) scene.bg = bgUrl
-        const res = await saveProject({
-          id: projectId, originalImageUrl: originalUrl,
-          finalImageUrl: finalUrl, stickerJson: serializeAll(canvasRef.current),
-          sceneJson: scene,
-        })
-        if (res.ok) { setProjectId(res.project.id); setStatus('Saved to Supabase ✓') }
-        else setStatus(`Saved locally (Supabase: ${res.reason})`)
-      } catch (err) { setStatus(`Export saved locally (upload failed: ${err.message})`) }
+    if (!dataUrl) return null
+    const ext = format === 'jpg' ? 'jpg' : 'png'
+    const blob = dataUrlToBlob(dataUrl)
+    const name = `pricetag-${Date.now()}.${ext}`
+    const file = makeFile(blob, name)
+    return { blob, file, name, format: ext, size: blob.size, canShare: canShareFile(file) }
+  }, [renderDataUrl])
+
+  // Push the export (and the editable scene) to Supabase. Runs after the file
+  // has already reached the device, so a failure here never blocks saving.
+  const uploadExportToCloud = useCallback(async (blob, format = 'png') => {
+    if (!isSupabaseConfigured || !blob) return
+    try {
+      setStatus('Backing up to cloud…')
+      const finalUrl = await uploadExport(blob, format)
+      const bgData = renderBackgroundDataUrl()
+      const bgUrl = bgData ? await uploadExport(dataUrlToBlob(bgData), 'png') : null
+      const originalUrl = await ensureOriginalUrl()
+      const scene = buildScene(); if (scene) scene.bg = bgUrl
+      const res = await saveProject({
+        id: projectId, originalImageUrl: originalUrl,
+        finalImageUrl: finalUrl, stickerJson: serializeAll(canvasRef.current),
+        sceneJson: scene,
+      })
+      if (res.ok) { setProjectId(res.project.id); setStatus('Saved to your device ✓ · backed up') }
+      else setStatus(`Saved to your device ✓ (cloud: ${res.reason})`)
+    } catch (err) {
+      setStatus(`Saved to your device ✓ (cloud backup failed: ${err.message})`)
     }
-  }, [renderDataUrl, projectId, ensureOriginalUrl, buildScene, renderBackgroundDataUrl])
+  }, [projectId, ensureOriginalUrl, buildScene, renderBackgroundDataUrl])
+
+  // Hand the file to the OS share sheet — on iPad this is the one route that
+  // offers both "Save Image" (Photos) and "Save to Files".
+  const shareExport = useCallback(async (desc) => {
+    if (!desc?.file) return 'unsupported'
+    const result = await shareFile(desc.file)
+    if (result === 'shared') setStatus('Sent to share sheet ✓')
+    else if (result === 'cancelled') setStatus('')
+    return result
+  }, [])
+
+  const saveExportToFiles = useCallback((desc) => {
+    if (!desc?.blob) return
+    downloadBlob(desc.blob, desc.name)
+    setStatus('Downloaded — check Files › Downloads')
+  }, [])
+
+  const openExportInTab = useCallback((desc) => {
+    if (!desc?.blob) return
+    openBlobInTab(desc.blob)
+    setStatus('Press and hold the image → Add to Photos')
+  }, [])
+
+  // Straight download, no chooser — used by the desktop PNG/JPG buttons.
+  const exportImage = useCallback(async (format = 'png') => {
+    const desc = prepareExport(format)
+    if (!desc) return
+    saveExportToFiles(desc)
+    await uploadExportToCloud(desc.blob, desc.format)
+  }, [prepareExport, saveExportToFiles, uploadExportToCloud])
 
   const save = useCallback(async () => {
     const c = canvasRef.current
@@ -614,9 +656,9 @@ export function useEditor() {
       // Save both the marked-up render and the editable scene so the project
       // reopens with its stickers + markup fully editable.
       const dataUrl = renderDataUrl('png')
-      const finalUrl = dataUrl ? await uploadExport(await dataUrlToBlob(dataUrl), 'png') : null
+      const finalUrl = dataUrl ? await uploadExport(dataUrlToBlob(dataUrl), 'png') : null
       const bgData = renderBackgroundDataUrl()
-      const bgUrl = bgData ? await uploadExport(await dataUrlToBlob(bgData), 'png') : null
+      const bgUrl = bgData ? await uploadExport(dataUrlToBlob(bgData), 'png') : null
       const originalUrl = await ensureOriginalUrl()
       const scene = buildScene(); if (scene) scene.bg = bgUrl
       const res = await saveProject({
@@ -644,6 +686,7 @@ export function useEditor() {
       updateStyle, updateGeom, updateMarkup, fitSticker, commit,
       bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup, deselect,
       undo, zoomBy, resetZoom, exportImage, save, fetchGallery, deleteProject: removeProject,
+      prepareExport, shareExport, saveExportToFiles, openExportInTab, uploadExportToCloud,
       startCrop, applyCrop, cancelCrop,
     },
   }

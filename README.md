@@ -16,6 +16,8 @@ Built with **React + Vite + Fabric.js**. Mobile-first, no login required.
 - ⚡ Quick templates: Amazon style · Clearance tag · Luxury label · Sale sticker
 - 🔍 Zoom & pan (scroll / pinch / Alt-drag), ↶ undo
 - 💾 Export PNG/JPG at original resolution + best-effort save to Supabase
+- 📲 **Save sheet** — on iPad/iPhone, save straight into **Photos** (share sheet
+  → "Save Image") or into **Files**; plain download + open-in-tab as fallbacks
 - ⌨️ Shortcuts: `Ctrl/⌘+Z` undo · `Ctrl/⌘+D` duplicate · `Delete` remove
 
 The whole canvas is **deterministic from `sticker_json`** — see the contract below.
@@ -35,6 +37,7 @@ The whole canvas is **deterministic from `sticker_json`** — see the contract b
     ├── index.css               # mobile-first styles + desktop 3-pane layout
     ├── hooks/useEditor.js      # Fabric canvas lifecycle, undo, zoom, export
     ├── lib/
+    │   ├── download.js         # share-sheet / blob download / open-in-tab helpers
     │   ├── supabase.js         # client (no-op if keys absent)
     │   ├── storage.js          # upload original/export to Storage
     │   ├── projects.js         # save/load project rows
@@ -42,8 +45,32 @@ The whole canvas is **deterministic from `sticker_json`** — see the contract b
     │   └── templates.js        # preset templates
     └── components/
         ├── PropertiesPanel.jsx
+        ├── SaveSheet.jsx       # "Save your photo" chooser (Photos / Files / tab)
         └── TemplatePanel.jsx
 ```
+
+## Saving the finished photo
+
+Tapping **Save / Download** renders the image at full resolution and opens a
+chooser with three routes, best first:
+
+| Route | What it does | Where it lands |
+| --- | --- | --- |
+| **Save to Photos or Files** | `navigator.share({ files })` → the native share sheet | Photos/albums via "Save Image", or Files via "Save to Files" |
+| **Download the file** | `<a download>` on a `blob:` URL | Files › Downloads (browser download folder on desktop) |
+| **Open the image in a new tab** | `window.open` on a `blob:` URL | Press and hold → "Add to Photos" (right-click → "Save image as…" on desktop) |
+
+The share option is only offered when `navigator.canShare({ files })` says yes
+(Safari on iPadOS/iOS 15+, Android Chrome). Two iOS constraints shape this code:
+
+- The export is decoded to a `Blob` **synchronously** (`dataUrlToBlob`) — any
+  `await` between the tap and `navigator.share()` makes Safari drop the
+  transient user activation and throw `NotAllowedError`.
+- The file is prepared when the sheet *opens*, so each button press shares or
+  downloads something that already exists in memory.
+
+The Supabase backup runs *after* the file reaches the device, so a cloud
+failure never blocks saving.
 
 ## Setup
 
