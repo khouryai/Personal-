@@ -127,12 +127,31 @@ body {
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: 14px;
   width: min(900px, 96vw); max-height: 86dvh; overflow: auto; padding: 14px 16px; }
 .modal-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.gallery-head-actions { display: flex; align-items: center; gap: 8px; }
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
 .gallery-item { background: var(--bg); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; }
+.gallery-item.current { border-color: var(--accent); }
+.gallery-thumb { position: relative; }
 .gallery-item img { width: 100%; height: 130px; object-fit: cover; display: block; background: #0b1220; }
 .gallery-noimg { height: 130px; display: grid; place-items: center; color: var(--muted); font-size: 12px; }
+.gallery-badge { position: absolute; top: 6px; left: 6px; background: var(--accent); color: #1a1206;
+  font-size: 10px; font-weight: 700; padding: 2px 6px; border-radius: 6px; }
+.gallery-overlay { position: absolute; inset: 0; display: flex; flex-direction: column; gap: 8px;
+  align-items: center; justify-content: center; background: rgba(11,18,32,.78); font-size: 12px; }
+.gallery-meta { display: flex; justify-content: space-between; gap: 6px;
+  padding: 6px 8px 0; font-size: 11px; color: var(--muted); }
 .gallery-actions { display: flex; flex-wrap: wrap; gap: 6px; padding: 8px; }
 .gallery-actions .btn { flex: 1 1 40px; min-width: 0; text-align: center; text-decoration: none; font-size: 12px; padding: 7px 6px; }
+.gallery-error { padding: 0 8px 8px; font-size: 11px; color: #fecaca; }
+
+/* shared spinner + canvas loading veil */
+.spinner { width: 18px; height: 18px; border-radius: 50%; display: inline-block;
+  border: 2px solid var(--line); border-top-color: var(--accent); animation: spin .7s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.canvas-loading { position: absolute; inset: 0; z-index: 5; display: flex; flex-direction: column;
+  gap: 10px; align-items: center; justify-content: center; background: rgba(11,18,32,.72);
+  color: var(--text); font-size: 13px; }
+@media (prefers-reduced-motion: reduce) { .spinner { animation-duration: 2s; } }
 
 /* ---------- save / download sheet ---------- */
 .save-sheet { width: min(460px, 96vw); }

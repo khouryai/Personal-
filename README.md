@@ -96,6 +96,31 @@ and project saves work out of the box, no `.env` needed.
    VITE_SUPABASE_ANON_KEY=sb_publishable_...
    ```
 
+## Saved photos
+
+The gallery grid renders `thumb_url` — a ~480px JPEG written on every save.
+It used to render `final_image_url`, a full-resolution PNG that routinely
+weighs 20-38 MB, once per card; that alone is why opening "Saved photos" and
+reopening a project felt broken.
+
+Reopening a project (`openProject`) is built around three rules:
+
+- **Fetch, then swap.** The new photo is downloaded and decoded *before* the
+  canvas is touched. The previous version cleared the canvas first and then
+  awaited the network, so a slow or failed load stranded the old photo with
+  its overlays already deleted.
+- **Newest load wins.** Every load takes a token; a load whose token is stale
+  when it finishes discards its result instead of painting over whatever the
+  user did in the meantime.
+- **The caller learns the outcome.** `openProject` resolves to
+  `{ ok, reason }` once the photo is genuinely on screen, so the gallery can
+  hold its spinner, close only on success, and show the failure otherwise.
+
+Saves are also much lighter: the editable backdrop only gets its own file
+once a **crop** has actually changed it (otherwise `scene_json.bg` just points
+at the stored original), and re-saving a project deletes the render it
+replaced instead of leaving it in the bucket forever.
+
 ## sticker_json contract
 
 Each overlay is stored as:

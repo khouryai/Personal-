@@ -127,7 +127,7 @@ export default function App() {
         <main className="stage">
           <div className="canvas-wrap">
             <canvas ref={ed.attach} />
-            {!ed.hasImage && (
+            {!ed.hasImage && !ed.loading && (
               <div className="dropzone" onClick={() => fileRef.current?.click()}>
                 <div className="dz-inner">
                   <div className="dz-icon">📷</div>
@@ -140,6 +140,12 @@ export default function App() {
                     Choose Image
                   </button>
                 </div>
+              </div>
+            )}
+            {ed.loading && (
+              <div className="canvas-loading">
+                <span className="spinner" />
+                <span>Loading photo…</span>
               </div>
             )}
             {ed.cropMode && (
@@ -200,7 +206,7 @@ export default function App() {
       )}
 
       {gallery && (
-        <Gallery api={ed.api} onClose={() => setGallery(false)} onOpen={ed.api.openImageUrl} />
+        <Gallery api={ed.api} currentId={ed.projectId} onClose={() => setGallery(false)} />
       )}
 
       {saveDesc && (

@@ -11,11 +11,15 @@ create table if not exists public.projects (
   user_id            uuid,                       -- nullable: no auth in MVP
   original_image_url text,
   final_image_url    text,
+  thumb_url          text,                       -- small JPEG preview for the gallery grid
   sticker_json       jsonb not null default '[]'::jsonb,
   scene_json         jsonb,                      -- full editable scene (stickers + markup) for reopening
   created_at         timestamptz not null default now(),
   updated_at         timestamptz not null default now()
 );
+
+-- For databases created before thumb_url existed.
+alter table public.projects add column if not exists thumb_url text;
 
 -- keep updated_at fresh on every update
 create or replace function public.set_updated_at()

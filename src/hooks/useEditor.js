@@ -13,7 +13,7 @@ import {
   applyMarkupStyle, PERSIST_PROPS,
 } from '../lib/markup.js'
 import { TEMPLATES } from '../lib/templates.js'
-import { uploadOriginal, uploadExport } from '../lib/storage.js'
+import { uploadOriginal, uploadExport, uploadThumb, removeByUrl } from '../lib/storage.js'
 import { saveProject, listProjects, loadProject, deleteProject } from '../lib/projects.js'
 import { isSupabaseConfigured } from '../lib/supabase.js'
 import {
@@ -21,6 +21,7 @@ import {
 } from '../lib/download.js'
 
 const GRID = 20
+const THUMB_MAX = 480 // longest edge of the gallery preview, in px
 
 export function useEditor() {
   const elRef = useRef(null)
@@ -32,9 +33,14 @@ export function useEditor() {
   const historyRef = useRef([])
   const drawingRef = useRef(null) // { obj, origin, tool } while drawing a markup
   const cropRectRef = useRef(null)
+  const loadTokenRef = useRef(0)     // increments per load; stale loads bail out
+  const sceneBgUrlRef = useRef(null) // uploaded backdrop for the current project
+  const bgDirtyRef = useRef(false)   // has the backdrop changed since it was stored?
+  const savedUrlsRef = useRef({ final: null, thumb: null }) // to clean up on re-save
 
   const [ready, setReady] = useState(false)
   const [hasImage, setHasImage] = useState(false)
+  const [loading, setLoading] = useState(false)
   const [activeSpec, setActiveSpec] = useState(null)
   const [activeMarkup, setActiveMarkup] = useState(null)
   const [snap, setSnap] = useState(false)
@@ -276,65 +282,141 @@ export function useEditor() {
   }, [])
 
   // ------------------------------------------------------------- load image
+  // Every load takes a ticket. A slow load that finishes after a newer one
+  // started must not paint itself over the newer photo — without this, opening
+  // two saved projects in quick succession left whichever was slower on screen.
+  const beginLoad = useCallback(() => {
+    loadTokenRef.current += 1
+    setLoading(true)
+    return loadTokenRef.current
+  }, [])
+  const isStale = (token) => token !== loadTokenRef.current
+
+  // Fetch the image FIRST, swap only once it has decoded. The old version
+  // cleared the canvas up front and then awaited the network, so any failure
+  // or slow response left the previous photo stranded with its overlays gone —
+  // exactly the "it doesn't replace the photo" symptom.
   const setBackground = useCallback(async (url, opts = {}) => {
     const c = canvasRef.current
-    if (!c) return
-    if (opts.clear) c.getObjects().slice().forEach((o) => c.remove(o))
+    if (!c) throw new Error('editor not ready')
+    if (!url) throw new Error('this photo has no image file')
+    // Fabric's own rejection reads "fabric: Error loading <url>" — not
+    // something to put in front of someone.
     const img = await FabricImage.fromURL(url, { crossOrigin: 'anonymous' })
+      .catch(() => { throw new Error('the image file couldn’t be loaded') })
+    if (!img) throw new Error('the image file couldn’t be loaded')
+    if (opts.token != null && isStale(opts.token)) return false
+    if (opts.clear) c.getObjects().slice().forEach((o) => c.remove(o))
     img.set({ originX: 'left', originY: 'top', left: 0, top: 0 })
     c.backgroundImage = img
     fitToContainer(false)
     setHasImage(true)
     historyRef.current = []
     pushHistory()
+    return true
   }, [fitToContainer, pushHistory])
 
   const loadImageFromFile = useCallback(async (file) => {
-    originalFileRef.current = file
-    originalUrlRef.current = null
-    setProjectId(null)
-    await setBackground(URL.createObjectURL(file), { clear: true })
-    setStatus('Image loaded')
-  }, [setBackground])
+    const token = beginLoad()
+    const objectUrl = URL.createObjectURL(file)
+    try {
+      originalFileRef.current = file
+      originalUrlRef.current = null
+      sceneBgUrlRef.current = null
+      bgDirtyRef.current = false
+      savedUrlsRef.current = { final: null, thumb: null }
+      setProjectId(null)
+      const applied = await setBackground(objectUrl, { clear: true, token })
+      if (applied) setStatus('Image loaded')
+      return { ok: true }
+    } catch (err) {
+      if (!isStale(token)) setStatus(`Couldn’t open that image: ${err.message}`)
+      return { ok: false, reason: err.message }
+    } finally {
+      URL.revokeObjectURL(objectUrl)
+      if (!isStale(token)) setLoading(false)
+    }
+  }, [setBackground, beginLoad])
 
   // open a saved image (flattened) into a fresh canvas
-  const openImageUrl = useCallback(async (url) => {
-    originalFileRef.current = null
-    originalUrlRef.current = null
-    setProjectId(null)
-    await setBackground(url, { clear: true })
-    setStatus('Opened saved image')
-  }, [setBackground])
+  const openImageUrl = useCallback(async (url, token = beginLoad()) => {
+    try {
+      originalFileRef.current = null
+      originalUrlRef.current = null
+      sceneBgUrlRef.current = null
+      bgDirtyRef.current = false
+      savedUrlsRef.current = { final: null, thumb: null }
+      setProjectId(null)
+      const applied = await setBackground(url, { clear: true, token })
+      if (applied) setStatus('Opened saved image')
+      return { ok: true }
+    } catch (err) {
+      if (!isStale(token)) setStatus(`Open failed: ${err.message}`)
+      return { ok: false, reason: err.message }
+    } finally {
+      if (!isStale(token)) setLoading(false)
+    }
+  }, [setBackground, beginLoad])
 
   // Reopen a saved PROJECT with its stickers + markup as editable objects.
+  // Resolves only once the photo is actually on screen, so callers can keep a
+  // spinner up and report a real failure instead of closing on a maybe.
   const openProject = useCallback(async (id) => {
-    setStatus('Opening project…')
-    const res = await loadProject(id)
-    if (!res.ok) { setStatus(`Open failed: ${res.reason}`); return }
-    const p = res.project
-    const scene = p.scene_json
-    const bg = scene?.bg || p.original_image_url
-    // Legacy / no editable scene -> fall back to opening the flattened image.
-    if (!scene?.objects || !bg) {
-      await openImageUrl(p.final_image_url || p.original_image_url)
+    const token = beginLoad()
+    setStatus('Opening…')
+    try {
+      const res = await loadProject(id)
+      if (!res.ok) throw new Error(res.reason)
+      if (isStale(token)) return { ok: false, reason: 'superseded' }
+
+      const p = res.project
+      const scene = p.scene_json
+      const bg = scene?.bg || p.original_image_url
+
+      // Legacy row with no editable scene -> open the flattened image instead.
+      if (!scene?.objects || !bg) {
+        const flat = p.final_image_url || p.original_image_url
+        if (!flat) throw new Error('this photo has no image file')
+        const r = await openImageUrl(flat, token)
+        if (!r.ok) return r
+        if (isStale(token)) return { ok: false, reason: 'superseded' }
+        // Saving this legacy row again should retire its old render, and will
+        // upgrade it to an editable scene.
+        savedUrlsRef.current = { final: p.final_image_url || null, thumb: p.thumb_url || null }
+        setProjectId(p.id)
+        setStatus('Opened as a flat image — this save has no editable layers')
+        return { ok: true, flattened: true }
+      }
+
+      originalFileRef.current = null
+      originalUrlRef.current = p.original_image_url || null
+      sceneBgUrlRef.current = scene.bg || null
+      bgDirtyRef.current = false
+      savedUrlsRef.current = { final: p.final_image_url || null, thumb: p.thumb_url || null }
+      const applied = await setBackground(bg, { clear: true, token })
+      if (!applied || isStale(token)) return { ok: false, reason: 'superseded' }
+
+      const c = canvasRef.current
+      if (!c) throw new Error('editor not ready')
+      const ratio = c.getWidth() / (scene.w || c.getWidth())
+      const objs = await util.enlivenObjects(scene.objects)
+      if (isStale(token)) return { ok: false, reason: 'superseded' }
+      objs.forEach((o) => {
+        o.set({ left: o.left * ratio, top: o.top * ratio, scaleX: o.scaleX * ratio, scaleY: o.scaleY * ratio })
+        o.setCoords(); c.add(o)
+      })
+      c.requestRenderAll()
+      historyRef.current = []; pushHistory()
       setProjectId(p.id)
-      return
+      setStatus('Reopened — fully editable')
+      return { ok: true }
+    } catch (err) {
+      if (!isStale(token)) setStatus(`Open failed: ${err.message}`)
+      return { ok: false, reason: err.message }
+    } finally {
+      if (!isStale(token)) setLoading(false)
     }
-    originalFileRef.current = null
-    originalUrlRef.current = p.original_image_url || null
-    await setBackground(bg, { clear: true })
-    const c = canvasRef.current
-    const ratio = c.getWidth() / (scene.w || c.getWidth())
-    const objs = await util.enlivenObjects(scene.objects)
-    objs.forEach((o) => {
-      o.set({ left: o.left * ratio, top: o.top * ratio, scaleX: o.scaleX * ratio, scaleY: o.scaleY * ratio })
-      o.setCoords(); c.add(o)
-    })
-    c.requestRenderAll()
-    historyRef.current = []; pushHistory()
-    setProjectId(p.id)
-    setStatus('Project reopened — fully editable')
-  }, [setBackground, openImageUrl, pushHistory])
+  }, [setBackground, openImageUrl, pushHistory, beginLoad])
 
   // ------------------------------------------------------------- stickers
   const centerPoint = () => {
@@ -528,13 +610,16 @@ export function useEditor() {
     cropped.set({ scaleX: r.width / sw, scaleY: r.height / sh })
     imageScaleRef.current = sw / r.width
     setCropMode(false)
+    // The backdrop is no longer the stored photo, so the next save has to
+    // upload its own copy of it.
+    bgDirtyRef.current = true
     fitToContainer(true)
     pushHistory()
     setStatus('Cropped')
   }, [fitToContainer, pushHistory])
 
   // ------------------------------------------------------------- export
-  const renderDataUrl = useCallback((format = 'png') => {
+  const renderDataUrl = useCallback((format = 'png', multiplier) => {
     const c = canvasRef.current
     if (!c) return null
     const saved = c.viewportTransform.slice()
@@ -542,11 +627,21 @@ export function useEditor() {
     c.discardActiveObject(); c.requestRenderAll()
     const dataUrl = c.toDataURL({
       format: format === 'jpg' ? 'jpeg' : 'png',
-      quality: 0.92, multiplier: imageScaleRef.current,
+      quality: 0.92, multiplier: multiplier ?? imageScaleRef.current,
     })
     c.setViewportTransform(saved); c.requestRenderAll()
     return dataUrl
   }, [])
+
+  // A ~480px JPEG for the gallery grid. The grid used to load final_image_url
+  // — a 20-38 MB full-resolution PNG — once per card, which is what made
+  // "Saved photos" so slow to open.
+  const renderThumbDataUrl = useCallback(() => {
+    const c = canvasRef.current
+    if (!c) return null
+    const m = Math.min(1, THUMB_MAX / Math.max(c.getWidth(), c.getHeight(), 1))
+    return renderDataUrl('jpg', m)
+  }, [renderDataUrl])
 
   // Render the background ONLY (overlays hidden) — used to persist the exact
   // editable backdrop, including any crops, for reopening a project.
@@ -594,28 +689,69 @@ export function useEditor() {
     return { blob, file, name, format: ext, size: blob.size, canShare: canShareFile(file) }
   }, [renderDataUrl])
 
-  // Push the export (and the editable scene) to Supabase. Runs after the file
-  // has already reached the device, so a failure here never blocks saving.
+  // One path for every write to Supabase, used by both Save and the
+  // post-download backup.
+  const persistProject = useCallback(async ({ finalBlob, format = 'png' }) => {
+    if (!isSupabaseConfigured) return { ok: false, reason: 'supabase-not-configured' }
+    const c = canvasRef.current
+    if (!c) return { ok: false, reason: 'editor not ready' }
+
+    const originalUrl = await ensureOriginalUrl()
+
+    // The backdrop only needs its own file once a crop has changed it.
+    // Previously every save re-rendered the untouched photo as a full-res PNG
+    // and uploaded it — a ~20 MB duplicate of a file already in storage, and
+    // the thing the editor then had to re-download on every reopen.
+    let bgUrl = sceneBgUrlRef.current || originalUrl
+    let staleBg = null
+    if (bgDirtyRef.current) {
+      const bgData = renderBackgroundDataUrl()
+      if (bgData) {
+        const uploaded = await uploadExport(dataUrlToBlob(bgData), 'png')
+        staleBg = sceneBgUrlRef.current
+        bgUrl = uploaded
+        sceneBgUrlRef.current = uploaded
+        bgDirtyRef.current = false
+      }
+    }
+
+    const finalUrl = finalBlob ? await uploadExport(finalBlob, format) : null
+    const thumbData = renderThumbDataUrl()
+    const thumbUrl = thumbData ? await uploadThumb(dataUrlToBlob(thumbData)) : null
+
+    const scene = buildScene(); if (scene) scene.bg = bgUrl
+    const res = await saveProject({
+      id: projectId, originalImageUrl: originalUrl,
+      finalImageUrl: finalUrl, thumbUrl,
+      stickerJson: serializeAll(c), sceneJson: scene,
+    })
+    if (!res.ok) return res
+
+    setProjectId(res.project.id)
+    // Only once the row points at the new files: drop the ones it replaced,
+    // never the original photo (the backdrop usually just references it).
+    const superseded = [staleBg, finalUrl && savedUrlsRef.current.final, thumbUrl && savedUrlsRef.current.thumb]
+      .filter((u) => u && u !== originalUrl && u !== bgUrl)
+    savedUrlsRef.current = {
+      final: finalUrl || savedUrlsRef.current.final,
+      thumb: thumbUrl || savedUrlsRef.current.thumb,
+    }
+    if (superseded.length) removeByUrl(...superseded)
+    return res
+  }, [projectId, ensureOriginalUrl, buildScene, renderBackgroundDataUrl, renderThumbDataUrl])
+
+  // Back up after the file has already reached the device, so a cloud failure
+  // never blocks saving.
   const uploadExportToCloud = useCallback(async (blob, format = 'png') => {
     if (!isSupabaseConfigured || !blob) return
     try {
       setStatus('Backing up to cloud…')
-      const finalUrl = await uploadExport(blob, format)
-      const bgData = renderBackgroundDataUrl()
-      const bgUrl = bgData ? await uploadExport(dataUrlToBlob(bgData), 'png') : null
-      const originalUrl = await ensureOriginalUrl()
-      const scene = buildScene(); if (scene) scene.bg = bgUrl
-      const res = await saveProject({
-        id: projectId, originalImageUrl: originalUrl,
-        finalImageUrl: finalUrl, stickerJson: serializeAll(canvasRef.current),
-        sceneJson: scene,
-      })
-      if (res.ok) { setProjectId(res.project.id); setStatus('Saved to your device ✓ · backed up') }
-      else setStatus(`Saved to your device ✓ (cloud: ${res.reason})`)
+      const res = await persistProject({ finalBlob: blob, format })
+      setStatus(res.ok ? 'Saved to your device ✓ · backed up' : `Saved to your device ✓ (cloud: ${res.reason})`)
     } catch (err) {
       setStatus(`Saved to your device ✓ (cloud backup failed: ${err.message})`)
     }
-  }, [projectId, ensureOriginalUrl, buildScene, renderBackgroundDataUrl])
+  }, [persistProject])
 
   // Hand the file to the OS share sheet — on iPad this is the one route that
   // offers both "Save Image" (Photos) and "Save to Files".
@@ -649,26 +785,23 @@ export function useEditor() {
 
   const save = useCallback(async () => {
     const c = canvasRef.current
-    if (!c) return
-    if (!isSupabaseConfigured) { setStatus('Supabase not configured'); return }
+    if (!c) return { ok: false, reason: 'editor not ready' }
+    if (!isSupabaseConfigured) { setStatus('Supabase not configured'); return { ok: false, reason: 'supabase-not-configured' } }
     try {
       setStatus('Saving…')
-      // Save both the marked-up render and the editable scene so the project
-      // reopens with its stickers + markup fully editable.
+      // Store both the flattened render and the editable scene, so the project
+      // reopens with its stickers + markup intact.
       const dataUrl = renderDataUrl('png')
-      const finalUrl = dataUrl ? await uploadExport(dataUrlToBlob(dataUrl), 'png') : null
-      const bgData = renderBackgroundDataUrl()
-      const bgUrl = bgData ? await uploadExport(dataUrlToBlob(bgData), 'png') : null
-      const originalUrl = await ensureOriginalUrl()
-      const scene = buildScene(); if (scene) scene.bg = bgUrl
-      const res = await saveProject({
-        id: projectId, originalImageUrl: originalUrl,
-        finalImageUrl: finalUrl, stickerJson: serializeAll(c), sceneJson: scene,
+      const res = await persistProject({
+        finalBlob: dataUrl ? dataUrlToBlob(dataUrl) : null, format: 'png',
       })
-      if (res.ok) { setProjectId(res.project.id); setStatus('Project saved ✓') }
-      else setStatus(`Save failed: ${res.reason}`)
-    } catch (err) { setStatus(`Save failed: ${err.message}`) }
-  }, [projectId, renderDataUrl, ensureOriginalUrl, buildScene, renderBackgroundDataUrl])
+      setStatus(res.ok ? 'Project saved ✓' : `Save failed: ${res.reason}`)
+      return res
+    } catch (err) {
+      setStatus(`Save failed: ${err.message}`)
+      return { ok: false, reason: err.message }
+    }
+  }, [renderDataUrl, persistProject])
 
   const fetchGallery = useCallback(() => listProjects(), [])
 
@@ -679,7 +812,7 @@ export function useEditor() {
   }, [projectId])
 
   return {
-    attach, ready, hasImage, activeSpec, activeMarkup, snap, setSnap, status,
+    attach, ready, hasImage, loading, projectId, activeSpec, activeMarkup, snap, setSnap, status,
     tool, setTool, markupColor, markupWidth, cropMode,
     api: {
       loadImageFromFile, openImageUrl, openProject, addSticker, applyTemplate,
