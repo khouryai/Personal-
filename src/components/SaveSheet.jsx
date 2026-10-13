@@ -12,7 +12,7 @@ export default function SaveSheet({ desc: initial, api, onClose }) {
 
   if (!desc) return null
 
-  const backup = () => { api.uploadExportToCloud(desc.blob, desc.format) }
+  const backup = () => { api.uploadExportToCloud() }
 
   const switchFormat = (format) => {
     if (format === desc.format) return

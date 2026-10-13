@@ -1,6 +1,18 @@
 import { supabase, isSupabaseConfigured } from './supabase.js'
 import { removeByUrl } from './storage.js'
 
+// Saved photos are deleted automatically this long after their last save.
+// The server-side job (supabase/functions/cleanup-old-photos) does the actual
+// deleting once a day; the app also hides anything past the cutoff so an
+// expired photo never shows up between runs.
+export const RETENTION_DAYS = 30
+const DAY_MS = 24 * 60 * 60 * 1000
+
+export function expiresAt(project) {
+  const t = new Date(project.updated_at || project.created_at).getTime()
+  return t + RETENTION_DAYS * DAY_MS
+}
+
 // Persist a project row. `id` optional — when provided we update in place.
 export async function saveProject({ id, originalImageUrl, finalImageUrl, thumbUrl, stickerJson, sceneJson }) {
   if (!isSupabaseConfigured) {
@@ -29,6 +41,7 @@ export async function listProjects(limit = 60) {
     .from('projects')
     // Never select scene_json here — it is large and the grid doesn't need it.
     .select('id, original_image_url, final_image_url, thumb_url, has_editable_scene, created_at, updated_at')
+    .gte('updated_at', new Date(Date.now() - RETENTION_DAYS * DAY_MS).toISOString())
     .order('updated_at', { ascending: false })
     .limit(limit)
   if (error) return { ok: false, reason: error.message, projects: [] }

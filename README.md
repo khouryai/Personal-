@@ -29,7 +29,8 @@ The whole canvas is **deterministic from `sticker_json`** — see the contract b
 ├── index.html
 ├── vite.config.js              # base: './' so it works on GitHub Pages
 ├── .env.example                # VITE_SUPABASE_URL / VITE_SUPABASE_ANON_KEY
-├── supabase/schema.sql         # projects table + storage buckets + RLS
+├── supabase/schema.sql         # projects table + storage buckets + RLS + 30-day cron
+├── supabase/functions/cleanup-old-photos/  # daily 30-day auto-delete
 ├── .github/workflows/deploy.yml# GitHub Pages CI
 └── src/
     ├── main.jsx
@@ -120,6 +121,20 @@ Saves are also much lighter: the editable backdrop only gets its own file
 once a **crop** has actually changed it (otherwise `scene_json.bg` just points
 at the stored original), and re-saving a project deletes the render it
 replaced instead of leaving it in the bucket forever.
+
+### Auto-delete after 30 days
+
+Saved photos are kept for **30 days after their last save** (saving a
+project again restarts its clock). Every day at 03:17 UTC a `pg_cron` job
+calls the [`cleanup-old-photos`](supabase/functions/cleanup-old-photos/index.ts)
+Edge Function, which deletes expired project rows and every Storage file they
+pointed at, plus any stray file older than 30 days that no project uses. The
+gallery also hides anything past the cutoff and shows how long each photo has
+left (`RETENTION_DAYS` in `src/lib/projects.js`).
+
+Cloud copies are JPEGs (finished render and cropped backdrop), so they stay
+well under the buckets' 50 MB per-file limit; the download to your device
+keeps the PNG/JPG format you picked.
 
 ## sticker_json contract
 

@@ -653,7 +653,8 @@ export function useEditor() {
     objs.forEach((o) => o.set('visible', false))
     const saved = c.viewportTransform.slice()
     c.setViewportTransform([1, 0, 0, 1, 0, 0]); c.requestRenderAll()
-    const url = c.toDataURL({ format: 'png', multiplier: imageScaleRef.current })
+    // JPEG: the backdrop is an opaque photo, and PNG made it 20+ MB.
+    const url = c.toDataURL({ format: 'jpeg', quality: 0.92, multiplier: imageScaleRef.current })
     c.setViewportTransform(saved)
     objs.forEach((o, i) => o.set('visible', vis[i]))
     c.requestRenderAll()
@@ -691,7 +692,7 @@ export function useEditor() {
 
   // One path for every write to Supabase, used by both Save and the
   // post-download backup.
-  const persistProject = useCallback(async ({ finalBlob, format = 'png' }) => {
+  const persistProject = useCallback(async () => {
     if (!isSupabaseConfigured) return { ok: false, reason: 'supabase-not-configured' }
     const c = canvasRef.current
     if (!c) return { ok: false, reason: 'editor not ready' }
@@ -707,7 +708,7 @@ export function useEditor() {
     if (bgDirtyRef.current) {
       const bgData = renderBackgroundDataUrl()
       if (bgData) {
-        const uploaded = await uploadExport(dataUrlToBlob(bgData), 'png')
+        const uploaded = await uploadExport(dataUrlToBlob(bgData), 'jpg')
         staleBg = sceneBgUrlRef.current
         bgUrl = uploaded
         sceneBgUrlRef.current = uploaded
@@ -715,7 +716,11 @@ export function useEditor() {
       }
     }
 
-    const finalUrl = finalBlob ? await uploadExport(finalBlob, format) : null
+    // The cloud copy is always a JPEG. A full-resolution PNG of a big photo
+    // runs 20-50+ MB and was hitting Storage's per-file size limit; the
+    // device download keeps whatever format was picked.
+    const finalData = renderDataUrl('jpg')
+    const finalUrl = finalData ? await uploadExport(dataUrlToBlob(finalData), 'jpg') : null
     const thumbData = renderThumbDataUrl()
     const thumbUrl = thumbData ? await uploadThumb(dataUrlToBlob(thumbData)) : null
 
@@ -738,15 +743,15 @@ export function useEditor() {
     }
     if (superseded.length) removeByUrl(...superseded)
     return res
-  }, [projectId, ensureOriginalUrl, buildScene, renderBackgroundDataUrl, renderThumbDataUrl])
+  }, [projectId, ensureOriginalUrl, buildScene, renderDataUrl, renderBackgroundDataUrl, renderThumbDataUrl])
 
   // Back up after the file has already reached the device, so a cloud failure
   // never blocks saving.
-  const uploadExportToCloud = useCallback(async (blob, format = 'png') => {
-    if (!isSupabaseConfigured || !blob) return
+  const uploadExportToCloud = useCallback(async () => {
+    if (!isSupabaseConfigured) return
     try {
       setStatus('Backing up to cloud…')
-      const res = await persistProject({ finalBlob: blob, format })
+      const res = await persistProject()
       setStatus(res.ok ? 'Saved to your device ✓ · backed up' : `Saved to your device ✓ (cloud: ${res.reason})`)
     } catch (err) {
       setStatus(`Saved to your device ✓ (cloud backup failed: ${err.message})`)
@@ -780,7 +785,7 @@ export function useEditor() {
     const desc = prepareExport(format)
     if (!desc) return
     saveExportToFiles(desc)
-    await uploadExportToCloud(desc.blob, desc.format)
+    await uploadExportToCloud()
   }, [prepareExport, saveExportToFiles, uploadExportToCloud])
 
   const save = useCallback(async () => {
@@ -791,17 +796,14 @@ export function useEditor() {
       setStatus('Saving…')
       // Store both the flattened render and the editable scene, so the project
       // reopens with its stickers + markup intact.
-      const dataUrl = renderDataUrl('png')
-      const res = await persistProject({
-        finalBlob: dataUrl ? dataUrlToBlob(dataUrl) : null, format: 'png',
-      })
+      const res = await persistProject()
       setStatus(res.ok ? 'Project saved ✓' : `Save failed: ${res.reason}`)
       return res
     } catch (err) {
       setStatus(`Save failed: ${err.message}`)
       return { ok: false, reason: err.message }
     }
-  }, [renderDataUrl, persistProject])
+  }, [persistProject])
 
   const fetchGallery = useCallback(() => listProjects(), [])
 

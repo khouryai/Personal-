@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { isSupabaseConfigured } from '../lib/supabase.js'
+import { RETENTION_DAYS, expiresAt } from '../lib/projects.js'
 
 const UNITS = [
   [1, 's'], [60, 'm'], [3600, 'h'], [86400, 'd'], [604800, 'w'], [2629800, 'mo'],
@@ -17,10 +18,16 @@ function timeAgo(iso) {
   return `${Math.floor(secs / size)}${unit} ago`
 }
 
+function expiresLabel(p) {
+  const days = Math.ceil((expiresAt(p) - Date.now()) / 86400000)
+  return days <= 1 ? 'deletes today' : `deletes in ${days}d`
+}
+
 export default function Gallery({ api, currentId, onClose }) {
   const [state, setState] = useState({ loading: true, projects: [], error: null })
   const [busy, setBusy] = useState(null)     // { id, action } in flight
   const [itemError, setItemError] = useState(null) // { id, message }
+  const [missing, setMissing] = useState(() => new Set()) // ids whose image file is gone
   // A ref, not just the state: two taps in the same tick both read the old
   // state value, so a fast double-tap would otherwise fire two opens.
   const busyRef = useRef(false)
@@ -88,6 +95,9 @@ export default function Gallery({ api, currentId, onClose }) {
         {!state.loading && !state.error && state.projects.length === 0 && (
           <p className="panel-empty">No saved photos yet. Save an image to keep it here.</p>
         )}
+        {isSupabaseConfigured && (
+          <p className="gallery-note">Saved photos are deleted automatically {RETENTION_DAYS} days after their last save.</p>
+        )}
 
         <div className="gallery-grid">
           {state.projects.map((p) => {
@@ -100,9 +110,10 @@ export default function Gallery({ api, currentId, onClose }) {
             return (
               <div className={`gallery-item${isCurrent ? ' current' : ''}`} key={p.id}>
                 <div className="gallery-thumb">
-                  {img
-                    ? <img src={img} alt="saved" loading="lazy" decoding="async" />
-                    : <div className="gallery-noimg">no image</div>}
+                  {img && !missing.has(p.id)
+                    ? <img src={img} alt="saved" loading="lazy" decoding="async"
+                        onError={() => setMissing((m) => new Set(m).add(p.id))} />
+                    : <div className="gallery-noimg">image missing</div>}
                   {isCurrent && <span className="gallery-badge">Open now</span>}
                   {thisBusy && (
                     <div className="gallery-overlay">
@@ -114,6 +125,7 @@ export default function Gallery({ api, currentId, onClose }) {
 
                 <div className="gallery-meta">
                   <span>{timeAgo(p.updated_at || p.created_at)}</span>
+                  <span>{expiresLabel(p)}</span>
                   {p.has_editable_scene === false && <span title="Saved before editable layers — reopens flat">flat</span>}
                 </div>
 

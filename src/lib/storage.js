@@ -12,7 +12,12 @@ async function uploadToBucket(bucket, blob, ext) {
   const { error } = await supabase.storage
     .from(bucket)
     .upload(path, blob, { contentType: blob.type, upsert: false })
-  if (error) throw error
+  if (error) {
+    if (/maximum allowed size/i.test(error.message)) {
+      throw new Error(`photo is too large to back up (${(blob.size / 1048576).toFixed(1)} MB)`)
+    }
+    throw error
+  }
   const { data } = supabase.storage.from(bucket).getPublicUrl(path)
   return data.publicUrl
 }
