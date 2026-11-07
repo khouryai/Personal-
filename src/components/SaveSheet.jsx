@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
 import { formatBytes, isIOS } from '../lib/download.js'
+import { savePrefs } from '../lib/prefs.js'
 
 // Where does the finished photo go? On iPad the share sheet is the only route
 // into Photos/albums, so it leads — with plain download + open-in-tab behind it.
@@ -17,7 +18,7 @@ export default function SaveSheet({ desc: initial, api, onClose }) {
   const switchFormat = (format) => {
     if (format === desc.format) return
     const next = api.prepareExport(format)
-    if (next) { setDesc(next); setError('') }
+    if (next) { setDesc(next); setError(''); savePrefs({ exportFormat: format }) }
   }
 
   // Called straight from the tap: api.shareExport reaches navigator.share

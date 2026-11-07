@@ -6,6 +6,7 @@ import MarkupBar from './components/MarkupBar.jsx'
 import Gallery from './components/Gallery.jsx'
 import SaveSheet from './components/SaveSheet.jsx'
 import { isSupabaseConfigured } from './lib/supabase.js'
+import { getPref } from './lib/prefs.js'
 
 export default function App() {
   const ed = useEditor()
@@ -17,7 +18,7 @@ export default function App() {
   // Render the image here, inside the tap, so the share sheet later opens with
   // the file already in hand (iOS needs the gesture, not a promise chain).
   const openSaveSheet = () => {
-    const desc = ed.api.prepareExport('png')
+    const desc = ed.api.prepareExport(getPref('exportFormat', 'png'))
     if (desc) setSaveDesc(desc)
   }
 

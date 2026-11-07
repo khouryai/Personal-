@@ -13,7 +13,7 @@ Built with **React + Vite + Fabric.js**. Mobile-first, no login required.
   rotation, scale, opacity, drop shadow
 - 🖐️ Drag · resize · rotate · layer (forward/back) · duplicate · delete
 - 🔲 Optional snap-to-grid
-- ⚡ Quick templates: Amazon style · Clearance tag · Luxury label · Sale sticker
+- ⚡ Quick templates: Pins · Clearance tag · Luxury label · Sale sticker
 - 🔍 Zoom & pan (scroll / pinch / Alt-drag), ↶ undo
 - 💾 Export PNG/JPG at original resolution + best-effort save to Supabase
 - 📲 **Save sheet** — on iPad/iPhone, save straight into **Photos** (share sheet
