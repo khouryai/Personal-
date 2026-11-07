@@ -7,7 +7,11 @@ import {
   serializeAll,
   setStickerText,
   fitStickerToText,
+  DEFAULT_STICKER,
 } from '../lib/stickers.js'
+import {
+  getPref, savePrefs, getStickerStyle, saveStickerStyle, clearStickerStyle,
+} from '../lib/prefs.js'
 import {
   createMarkupStart, updateMarkupDraw, isTooSmall, makeArrowGroup,
   applyMarkupStyle, PERSIST_PROPS,
@@ -43,12 +47,12 @@ export function useEditor() {
   const [loading, setLoading] = useState(false)
   const [activeSpec, setActiveSpec] = useState(null)
   const [activeMarkup, setActiveMarkup] = useState(null)
-  const [snap, setSnap] = useState(false)
+  const [snap, setSnap] = useState(() => getPref('snap', false))
   const [status, setStatus] = useState('')
   const [projectId, setProjectId] = useState(null)
   const [tool, setTool] = useState(null) // null=select | line|arrow|box|circle|pen
-  const [markupColor, setMarkupColor] = useState('#ff3b30')
-  const [markupWidth, setMarkupWidth] = useState(4)
+  const [markupColor, setMarkupColor] = useState(() => getPref('markupColor', '#ff3b30'))
+  const [markupWidth, setMarkupWidth] = useState(() => getPref('markupWidth', 4))
   const [cropMode, setCropMode] = useState(false)
 
   // refs mirroring state for use inside Fabric event closures
@@ -58,6 +62,9 @@ export function useEditor() {
   const widthRef = useRef(markupWidth); widthRef.current = markupWidth
   const cropRef = useRef(false); cropRef.current = cropMode
   const pinchRef = useRef(false)
+
+  // Remember this browser's canvas/markup settings between visits.
+  useEffect(() => { savePrefs({ snap, markupColor, markupWidth }) }, [snap, markupColor, markupWidth])
 
   // ----------------------------------------------------------- fit to screen
   // Size the canvas to fill the available stage area, rescaling overlays so
@@ -126,7 +133,7 @@ export function useEditor() {
     canvas.on('selection:created', sync)
     canvas.on('selection:updated', sync)
     canvas.on('selection:cleared', () => { setActiveSpec(null); setActiveMarkup(null) })
-    canvas.on('object:modified', () => { sync(); pushHistory() })
+    canvas.on('object:modified', () => { sync(); rememberSticker(canvas.getActiveObject()); pushHistory() })
     canvas.on('object:moving', (e) => {
       if (!snapRef.current) return
       const t = e.target
@@ -419,26 +426,54 @@ export function useEditor() {
   }, [setBackground, openImageUrl, pushHistory, beginLoad])
 
   // ------------------------------------------------------------- stickers
+  // Save a sticker's style as this browser's setting for its template.
+  function rememberSticker(o) {
+    if (o?.stickerType !== 'price_tag') return
+    saveStickerStyle(o.spec.template || 'custom', serializeSticker(o))
+  }
+
   const centerPoint = () => {
     const c = canvasRef.current
     return { x: (c?.getWidth() || 400) / 2, y: (c?.getHeight() || 400) / 2 }
   }
 
-  const addSticker = useCallback((partial = {}) => {
+  // No argument = the plain ➕ Sticker, using this browser's saved style.
+  const addSticker = useCallback((partial) => {
     const c = canvasRef.current
     if (!c) return
     setTool(null)
     const p = centerPoint()
-    const obj = createStickerObject({ x: p.x, y: p.y, ...partial })
+    const spec = partial ?? { template: 'custom', ...getStickerStyle('custom') }
+    const obj = createStickerObject({ x: p.x, y: p.y, ...spec })
     c.add(obj); c.setActiveObject(obj); c.requestRenderAll()
     setActiveSpec(serializeSticker(obj)); setActiveMarkup(null)
     pushHistory()
   }, [pushHistory])
 
+  // Template defaults, overridden by whatever this browser last set for it.
   const applyTemplate = useCallback((key) => {
     const t = TEMPLATES[key]
-    if (t) addSticker({ ...t })
+    if (t) addSticker({ ...t, template: key, ...getStickerStyle(key) })
   }, [addSticker])
+
+  // Go back to the template's original look and forget the saved settings.
+  const resetSticker = useCallback(() => {
+    const c = canvasRef.current
+    const o = c?.getActiveObject()
+    if (o?.stickerType !== 'price_tag') return
+    const key = o.spec.template || 'custom'
+    clearStickerStyle(key)
+    const base = { ...DEFAULT_STICKER, ...(TEMPLATES[key] || {}) }
+    o.spec = {
+      ...o.spec,
+      fontSize: base.fontSize, fontWeight: base.fontWeight, textColor: base.textColor,
+      bgColor: base.bgColor, shape: base.shape, shadow: base.shadow,
+      pad: base.pad ?? 8, textAngle: base.textAngle || 0, boxW: null, boxH: null,
+    }
+    o.set({ angle: base.rotation || 0, scaleX: base.scale || 1, scaleY: base.scale || 1, opacity: base.opacity ?? 1 })
+    setActiveSpec(serializeSticker(rebuildStickerObject(c, o)))
+    pushHistory()
+  }, [pushHistory])
 
   const updateStyle = useCallback((patch) => {
     const c = canvasRef.current
@@ -459,13 +494,18 @@ export function useEditor() {
     o.spec = { ...o.spec, ...patch }
     // Text size stays independent of shape size — the shape only re-fits when
     // the user changes padding or taps "Fit shape to text" (those pass boxW/H null).
-    setActiveSpec(serializeSticker(rebuildStickerObject(c, o)))
+    const next = rebuildStickerObject(c, o)
+    rememberSticker(next)
+    setActiveSpec(serializeSticker(next))
   }, [])
 
   const fitSticker = useCallback(() => {
     const c = canvasRef.current
     const o = c?.getActiveObject()
-    if (o?.stickerType === 'price_tag') setActiveSpec(serializeSticker(fitStickerToText(c, o)))
+    if (o?.stickerType !== 'price_tag') return
+    const next = fitStickerToText(c, o)
+    rememberSticker(next)
+    setActiveSpec(serializeSticker(next))
   }, [])
 
   const updateGeom = useCallback((patch) => {
@@ -476,7 +516,7 @@ export function useEditor() {
     if (patch.opacity != null) o.set('opacity', patch.opacity)
     if (patch.scale != null) o.set({ scaleX: patch.scale, scaleY: patch.scale })
     o.setCoords(); c.requestRenderAll()
-    if (o.stickerType === 'price_tag') setActiveSpec(serializeSticker(o))
+    if (o.stickerType === 'price_tag') { rememberSticker(o); setActiveSpec(serializeSticker(o)) }
   }, [])
 
   // ------------------------------------------------------------- markup style
@@ -817,7 +857,7 @@ export function useEditor() {
     attach, ready, hasImage, loading, projectId, activeSpec, activeMarkup, snap, setSnap, status,
     tool, setTool, markupColor, markupWidth, cropMode,
     api: {
-      loadImageFromFile, openImageUrl, openProject, addSticker, applyTemplate,
+      loadImageFromFile, openImageUrl, openProject, addSticker, applyTemplate, resetSticker,
       updateStyle, updateGeom, updateMarkup, fitSticker, commit,
       bringForward, sendBackward, duplicateActive, deleteActive, clearMarkup, deselect,
       undo, zoomBy, resetZoom, exportImage, save, fetchGallery, deleteProject: removeProject,

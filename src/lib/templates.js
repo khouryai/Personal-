@@ -1,14 +1,20 @@
 // Quick-preset templates. Each returns a partial sticker style that is merged
 // onto the default sticker when applied.
 export const TEMPLATES = {
-  amazon: {
-    label: 'Amazon style',
-    text: '$19.99',
-    shape: 'rounded_rect',
-    bgColor: '#FF9900',
-    textColor: '#111111',
+  // Same look and settings as the Sale sticker, in deep purple with white text.
+  pins: {
+    label: 'Pins',
+    text: '$',
+    shape: 'circle',
+    bgColor: '#6D28D9',
+    textColor: '#FFFFFF',
     fontWeight: 'bold',
-    fontSize: 34,
+    fontSize: 40,
+    pad: 8,
+    rotation: 0,
+    textAngle: 0,
+    scale: 1,
+    opacity: 1,
     shadow: 'rgba(0,0,0,0.25) 0 2 6',
   },
   clearance: {
@@ -38,7 +44,7 @@ export const TEMPLATES = {
     bgColor: '#FFFFFF',
     textColor: '#000000',
     fontWeight: 'bold',
-    fontSize: 45,
+    fontSize: 40,
     pad: 8,
     rotation: 0,
     textAngle: 0,

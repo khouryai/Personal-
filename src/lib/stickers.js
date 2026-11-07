@@ -128,6 +128,7 @@ export function createStickerObject(partial) {
     textColor: spec.textColor, bgColor: spec.bgColor, shape: spec.shape,
     shadow: spec.shadow, textAngle: spec.textAngle || 0,
     pad: spec.pad ?? 8, boxW: spec.boxW ?? null, boxH: spec.boxH ?? null,
+    template: spec.template || null, // which preset it came from (for saved settings)
   }
   const { children, boxW, boxH } = buildChildren(styleSpec)
   styleSpec.boxW = boxW // persist the fixed box so future edits keep the size
@@ -200,6 +201,7 @@ export function serializeSticker(g) {
     pad: g.spec.pad ?? 8,
     boxW: g.spec.boxW ?? null,
     boxH: g.spec.boxH ?? null,
+    template: g.spec.template || null,
   }
 }
 

@@ -1,7 +1,7 @@
 import React from 'react'
 import { SHAPES } from '../lib/stickers.js'
 
-const BG_SWATCHES = ['#FFD700', '#FFFFFF', '#E11D48', '#FF9900', '#111111', '#22C55E']
+const BG_SWATCHES = ['#FFD700', '#FFFFFF', '#E11D48', '#FF9900', '#6D28D9', '#111111', '#22C55E']
 
 export default function PropertiesPanel({ spec, api }) {
   if (!spec) {
@@ -33,7 +33,13 @@ export default function PropertiesPanel({ spec, api }) {
           onMouseUp={api.commit} onTouchEnd={api.commit}
         />
       </label>
-      <button className="btn small" onClick={api.fitSticker}>⤢ Snap shape to text</button>
+      <div className="field layer-row">
+        <button className="btn small" onClick={api.fitSticker}>⤢ Snap shape to text</button>
+        <button className="btn small" onClick={api.resetSticker}
+          title="Go back to this sticker's original settings and forget the saved ones">
+          ↺ Reset to default
+        </button>
+      </div>
 
       <div className="field">
         <span>Shape</span>
@@ -125,6 +131,7 @@ export default function PropertiesPanel({ spec, api }) {
         <button className="btn" onClick={api.duplicateActive}>⧉ Duplicate</button>
         <button className="btn danger" onClick={api.deleteActive}>🗑 Delete</button>
       </div>
+      <p className="prefs-hint">Your settings are remembered on this device.</p>
     </div>
   )
 }
