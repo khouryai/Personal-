@@ -24,13 +24,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
+      # The public Supabase config is committed (src/lib/supabaseConfig.js), so
+      # the build needs no secrets. Repo secrets are deliberately NOT passed in:
+      # stale ones carried over when the repo moved accounts would silently point
+      # the live site at the old Supabase project.
       - run: npm run build
-        env:
-          # The public Supabase config is committed (src/lib/supabaseConfig.js),
-          # so no secrets are required. These optional secrets, if set, override
-          # it to point a deployment at a different project.
-          VITE_SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          VITE_SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
       - uses: actions/upload-pages-artifact@v3
         with:
           path: dist

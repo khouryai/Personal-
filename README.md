@@ -81,7 +81,7 @@ npm run dev               # http://localhost:5173 — works immediately
 ```
 
 A live Supabase backend is **already wired in** (dedicated project
-`pricetag-studio`, ref `uhyslmfvseliykfhhwyh`) via the committed public config
+`pricetag-studio`, ref `nmdaykrrrxglqvgfazln`) via the committed public config
 in [`src/lib/supabaseConfig.js`](src/lib/supabaseConfig.js) — uploads, exports
 and project saves work out of the box, no `.env` needed.
 
@@ -171,11 +171,12 @@ Each overlay is stored as:
 ## Deploy (GitHub Pages)
 
 1. Repo **Settings → Pages → Source: GitHub Actions** (one-time, manual).
-2. Push to `main` (or this feature branch) — [`deploy.yml`](.github/workflows/deploy.yml)
-   builds and publishes `dist/`. `base: './'` keeps asset paths correct on the
-   `/<repo>/` subpath. The Supabase config is committed, so **no secrets are
-   required**; optionally set `VITE_SUPABASE_URL` / `VITE_SUPABASE_ANON_KEY`
-   repo secrets to override it.
+2. Push to `main` or `claude/pricetag-studio-build-tbtiao` (the default branch) —
+   [`deploy.yml`](.github/workflows/deploy.yml) builds and publishes `dist/` to
+   https://aik-data.github.io/Personal-/. `base: './'` keeps asset paths correct
+   on the `/<repo>/` subpath. The Supabase config is committed, so **no secrets
+   are needed**; to point the site at another project, edit
+   `src/lib/supabaseConfig.js`.
 
 > Prefer Vercel? Import the repo, set the two env vars, framework **Vite** —
 > the relative base path works there too.
